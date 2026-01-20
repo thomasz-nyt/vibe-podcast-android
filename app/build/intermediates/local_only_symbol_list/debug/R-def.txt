@@ -1,0 +1,6 @@
+R_DEF: Internal format may change without notice
+local
+drawable ic_launcher_foreground
+string app_name
+style Base.Theme.PodcastPlayer
+style Theme.PodcastPlayer

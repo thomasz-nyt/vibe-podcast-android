@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PodcastPlayer</string>
+    <style name="Base.Theme.PodcastPlayer" parent="Theme.Material3.DayNight.NoActionBar">
+    </style>
+    <style name="Theme.PodcastPlayer" parent="Base.Theme.PodcastPlayer"/>
+</resources>
