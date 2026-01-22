@@ -23,14 +23,19 @@ class PlayerViewModel(
     private val _currentEpisode = MutableStateFlow<Episode?>(null)
     val currentEpisode: StateFlow<Episode?> = _currentEpisode.asStateFlow()
 
+    private val _currentArtworkUrl = MutableStateFlow<String?>(null)
+    val currentArtworkUrl: StateFlow<String?> = _currentArtworkUrl.asStateFlow()
+
     private val _sleepTimerRemaining = MutableStateFlow<Long?>(null)
     val sleepTimerRemaining: StateFlow<Long?> = _sleepTimerRemaining.asStateFlow()
 
     private var sleepTimerJob: Job? = null
 
+
     fun playEpisode(episode: Episode, artworkUrl: String?) {
         viewModelScope.launch {
             _currentEpisode.value = episode
+            _currentArtworkUrl.value = episode.imageUrl ?: artworkUrl
             _playerState.value = _playerState.value.copy(
                 state = PlaybackState.LOADING,
                 currentEpisode = episode

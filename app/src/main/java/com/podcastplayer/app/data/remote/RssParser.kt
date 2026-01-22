@@ -23,6 +23,7 @@ class RssParser {
         var audioUrl = ""
         var duration: Long? = null
         var imageUrl: String? = null
+        var guid: String? = null
         var currentTag: String? = null
         val currentText = StringBuilder()
 
@@ -39,6 +40,7 @@ class RssParser {
                         audioUrl = ""
                         duration = null
                         imageUrl = null
+                        guid = null
                     }
                     if (inItem && currentTag == "enclosure") {
                         audioUrl = parser.getAttributeValue(null, "url") ?: audioUrl
@@ -60,9 +62,12 @@ class RssParser {
                     if (inItem) {
                         when (parser.name) {
                             "item" -> {
+                                val resolvedId = guid?.takeIf { it.isNotBlank() }
+                                    ?: audioUrl.takeIf { it.isNotBlank() }
+                                    ?: "${podcastId}_${episodes.size}"
                                 episodes.add(
                                     Episode(
-                                        id = "${podcastId}_${episodes.size}",
+                                        id = resolvedId,
                                         podcastId = podcastId,
                                         title = title.trim(),
                                         description = description?.trim(),
@@ -81,6 +86,10 @@ class RssParser {
 
                             "description" -> {
                                 description = currentText.toString()
+                            }
+
+                            "guid" -> {
+                                guid = currentText.toString().trim()
                             }
 
                             "pubDate" -> {

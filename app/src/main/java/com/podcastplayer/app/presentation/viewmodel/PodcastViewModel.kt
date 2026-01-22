@@ -36,6 +36,9 @@ class PodcastViewModel(
     private val _downloadedEpisodes = MutableStateFlow<List<Episode>>(emptyList())
     val downloadedEpisodes: StateFlow<List<Episode>> = _downloadedEpisodes.asStateFlow()
 
+    private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val downloadProgress: StateFlow<Map<String, Float>> = _downloadProgress.asStateFlow()
+
     private val _savedPodcasts = MutableStateFlow<List<Podcast>>(emptyList())
     val savedPodcasts: StateFlow<List<Podcast>> = _savedPodcasts.asStateFlow()
 
@@ -125,10 +128,18 @@ class PodcastViewModel(
         _selectedEpisode.value = episode
     }
 
-    suspend fun downloadEpisode(episode: Episode): Result<String> {
-        val result = downloadManager.downloadEpisode(episode)
-        refreshEpisodesWithDownloads()
-        return result
+    fun startDownload(episode: Episode) {
+        if (_downloadProgress.value.containsKey(episode.id)) return
+        _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
+        viewModelScope.launch {
+            val result = downloadManager.downloadEpisode(episode) { progress ->
+                _downloadProgress.value = _downloadProgress.value + (episode.id to progress)
+            }
+            _downloadProgress.value = _downloadProgress.value - episode.id
+            if (result.isSuccess) {
+                refreshEpisodesWithDownloads()
+            }
+        }
     }
 
     suspend fun deleteDownload(episodeId: String): Result<Unit> {

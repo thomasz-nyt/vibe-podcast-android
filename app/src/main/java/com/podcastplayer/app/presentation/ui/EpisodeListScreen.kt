@@ -36,8 +36,10 @@ fun EpisodeListScreen(
 ) {
     val episodesState by podcastViewModel.episodesUiState.collectAsState()
     val downloadedEpisodes by podcastViewModel.downloadedEpisodes.collectAsState()
+    val downloadProgress by podcastViewModel.downloadProgress.collectAsState()
     val downloadedIds = remember(downloadedEpisodes) { downloadedEpisodes.map { it.id }.toSet() }
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
+    val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -82,18 +84,20 @@ fun EpisodeListScreen(
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(state.episodes) { episode ->
+                            items(state.episodes, key = { it.id }) { episode ->
                                 val isDownloaded = downloadedIds.contains(episode.id) || episode.isDownloaded
+                                val progress = downloadProgress[episode.id]
                                 EpisodeItem(
                                     episode = episode,
                                     artworkUrl = podcast?.artworkUrl,
                                     isDownloaded = isDownloaded,
+                                    downloadProgress = progress,
                                     onClick = {
                                         playerViewModel.playEpisode(episode, podcast?.artworkUrl)
                                         onPlayEpisode()
                                     },
                                     onDownload = {
-                                        scope.launch { podcastViewModel.downloadEpisode(episode) }
+                                        podcastViewModel.startDownload(episode)
                                     },
                                     onDelete = {
                                         scope.launch { podcastViewModel.deleteDownload(episode.id) }
@@ -116,7 +120,7 @@ fun EpisodeListScreen(
             currentEpisode?.let {
                 MiniPlayerBar(
                     episode = it,
-                    artworkUrl = podcast?.artworkUrl,
+                    artworkUrl = currentArtworkUrl ?: podcast?.artworkUrl,
                     playerState = playerState,
                     onPlayPause = { playerViewModel.togglePlayPause() },
                     onOpenPlayer = onOpenPlayer,
@@ -132,6 +136,7 @@ fun EpisodeItem(
     episode: Episode,
     artworkUrl: String?,
     isDownloaded: Boolean,
+    downloadProgress: Float?,
     onClick: () -> Unit,
     onDownload: () -> Unit,
     onDelete: () -> Unit
@@ -188,6 +193,13 @@ fun EpisodeItem(
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
+            if (downloadProgress != null && !isDownloaded) {
+                LinearProgressIndicator(
+                    progress = downloadProgress.coerceIn(0f, 1f),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -204,8 +216,11 @@ fun EpisodeItem(
                     }
                 } else {
                     Spacer(modifier = Modifier.width(1.dp))
-                    Button(onClick = onDownload) {
-                        Text("Download")
+                    Button(
+                        onClick = onDownload,
+                        enabled = downloadProgress == null
+                    ) {
+                        Text(if (downloadProgress != null) "Downloading..." else "Download")
                     }
                 }
             }

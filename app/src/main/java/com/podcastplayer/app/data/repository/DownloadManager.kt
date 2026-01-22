@@ -26,7 +26,10 @@ class DownloadManager(private val context: Context) {
             mkdirs()
         }
 
-    suspend fun downloadEpisode(episode: Episode): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun downloadEpisode(
+        episode: Episode,
+        onProgress: (Float) -> Unit = {}
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val fileName = "${episode.id}.mp3"
             val localFile = File(downloadDir, fileName)
@@ -35,10 +38,26 @@ class DownloadManager(private val context: Context) {
                 return@withContext Result.success(localFile.absolutePath)
             }
 
-            URL(episode.audioUrl).openStream().use { input ->
+            val connection = URL(episode.audioUrl).openConnection()
+            val totalBytes = connection.contentLengthLong
+
+            connection.getInputStream().use { input ->
                 FileOutputStream(localFile).use { output ->
-                    input.copyTo(output)
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var bytesRead: Int
+                    var downloaded = 0L
+                    while (input.read(buffer).also { bytesRead = it } >= 0) {
+                        output.write(buffer, 0, bytesRead)
+                        downloaded += bytesRead
+                        if (totalBytes > 0) {
+                            onProgress(downloaded.toFloat() / totalBytes.toFloat())
+                        }
+                    }
                 }
+            }
+
+            if (totalBytes > 0) {
+                onProgress(1f)
             }
 
             val entity = episode.toEntity(localFile.absolutePath)

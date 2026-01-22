@@ -39,8 +39,8 @@ fun PodcastListScreen(
     val focusManager = LocalFocusManager.current
     val uiState by viewModel.uiState.collectAsState()
     val savedPodcasts by viewModel.savedPodcasts.collectAsState()
-    val selectedPodcast by viewModel.selectedPodcast.collectAsState()
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
+    val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
 
     LaunchedEffect(searchQuery) {
@@ -166,7 +166,7 @@ fun PodcastListScreen(
             currentEpisode?.let {
                 MiniPlayerBar(
                     episode = it,
-                    artworkUrl = selectedPodcast?.artworkUrl,
+                    artworkUrl = currentArtworkUrl,
                     playerState = playerState,
                     onPlayPause = { playerViewModel.togglePlayPause() },
                     onOpenPlayer = onOpenPlayer,

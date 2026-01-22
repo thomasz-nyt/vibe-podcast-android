@@ -7,6 +7,9 @@
 - Compose BOM aligned (2023.10.01) to match compiler; crash resolved.
 - Gradle wrapper + AndroidX/Jetifier + SDK path added; debug build verified via `./gradlew assembleDebug` (JDK 17).
 - Media notification now uses Media3 PlayerNotificationManager with metadata from episodes.
+- Mini player artwork sticks to the active episode.
+- Episode IDs now use RSS `guid`/`enclosure` URL to keep list and playback aligned.
+- Download flow exposes progress and disables the button while downloading.
 
 ## Known Warnings/Follow-ups
 - Room: schema export path not set (kapt warning); choose `exportSchema=false` or set `room.schemaLocation`.
