@@ -1,5 +1,6 @@
 package com.podcastplayer.app.presentation.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -33,6 +34,16 @@ fun PodcastNavHost() {
     var currentScreen by remember { mutableStateOf("search") }
     var selectedPodcast by remember { mutableStateOf<Podcast?>(null) }
 
+    BackHandler(enabled = currentScreen != "search") {
+        when (currentScreen) {
+            "player" -> currentScreen = "episodes"
+            "episodes" -> {
+                currentScreen = "search"
+                selectedPodcast = null
+            }
+        }
+    }
+
     when (currentScreen) {
         "search" -> {
             PodcastListScreen(
@@ -65,10 +76,11 @@ fun PodcastNavHost() {
             val currentEpisode by playerViewModel.currentEpisode.collectAsState()
             val playerState by playerViewModel.playerState.collectAsState()
             val sleepTimerRemaining by playerViewModel.sleepTimerRemaining.collectAsState()
+            val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
             PlayerScreen(
                 episode = currentEpisode ?: Episode("", "", "", null, null, "", null, null),
                 playerState = playerState,
-                artworkUrl = selectedPodcast?.artworkUrl,
+                artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
                 sleepTimerRemaining = sleepTimerRemaining,
                 onPlayPause = { playerViewModel.togglePlayPause() },
                 onSeek = { playerViewModel.seekTo(it) },
