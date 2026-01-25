@@ -55,12 +55,13 @@ fun EpisodeListScreen(
             )
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Box(modifier = Modifier.weight(1f, fill = true)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f, fill = true)) {
                 when (val state = episodesState) {
                     is EpisodesUiState.Initial -> {
                         Box(
@@ -81,7 +82,7 @@ fun EpisodeListScreen(
                     is EpisodesUiState.Success -> {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(16.dp),
+                            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 140.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(state.episodes, key = { it.id }) { episode ->
@@ -116,19 +117,24 @@ fun EpisodeListScreen(
                     }
                 }
             }
+        }
 
-            currentEpisode?.let {
-                MiniPlayerBar(
-                    episode = it,
-                    artworkUrl = currentArtworkUrl ?: podcast?.artworkUrl,
-                    playerState = playerState,
-                    onPlayPause = { playerViewModel.togglePlayPause() },
-                    onOpenPlayer = onOpenPlayer,
-                    onSeek = { playerViewModel.seekTo(it) }
-                )
-            }
+        currentEpisode?.let {
+            MiniPlayerBar(
+                episode = it,
+                artworkUrl = currentArtworkUrl ?: podcast?.artworkUrl,
+                playerState = playerState,
+                onPlayPause = { playerViewModel.togglePlayPause() },
+                onOpenPlayer = onOpenPlayer,
+                onSeek = { playerViewModel.seekTo(it) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
         }
     }
+}
+
 }
 
 @Composable

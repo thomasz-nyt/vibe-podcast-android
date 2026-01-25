@@ -7,6 +7,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.material3.Divider
@@ -31,7 +33,9 @@ fun PodcastListScreen(
     viewModel: com.podcastplayer.app.presentation.viewmodel.PodcastViewModel,
     playerViewModel: com.podcastplayer.app.presentation.viewmodel.PlayerViewModel,
     onPodcastSelected: (Podcast) -> Unit,
-    onOpenPlayer: () -> Unit
+    onOpenPlayer: () -> Unit,
+    onOpenQueue: () -> Unit,
+    onPlayQueue: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
@@ -39,6 +43,7 @@ fun PodcastListScreen(
     val focusManager = LocalFocusManager.current
     val uiState by viewModel.uiState.collectAsState()
     val savedPodcasts by viewModel.savedPodcasts.collectAsState()
+    val queuePodcasts by viewModel.queuePodcasts.collectAsState()
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
@@ -50,16 +55,27 @@ fun PodcastListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Podcast Player") }
+                title = { Text("Podcast Player") },
+                actions = {
+                    IconButton(onClick = onPlayQueue, enabled = queuePodcasts.isNotEmpty()) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play queue")
+                    }
+                    IconButton(onClick = onOpenQueue) {
+                        Icon(Icons.Default.QueueMusic, contentDescription = "Open queue")
+                    }
+                }
             )
         }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            OutlinedTextField(
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier
@@ -85,7 +101,7 @@ fun PodcastListScreen(
             ) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 140.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (!isSearchFocused) {
@@ -98,11 +114,14 @@ fun PodcastListScreen(
                         }
                         if (savedPodcasts.isNotEmpty()) {
                             items(savedPodcasts) { podcast ->
+                                val alreadyQueued = queuePodcasts.any { it.id == podcast.id }
                                 PodcastItem(
                                     podcast = podcast,
                                     onClick = { onPodcastSelected(podcast) },
                                     onSaveToggle = { viewModel.removeSavedPodcast(podcast.id) },
-                                    isSaved = true
+                                    onQueueAdd = { viewModel.addToQueue(podcast) },
+                                    isSaved = true,
+                                    isQueued = alreadyQueued
                                 )
                             }
                         } else {
@@ -162,19 +181,24 @@ fun PodcastListScreen(
                     }
                 }
             }
+        }
 
-            currentEpisode?.let {
-                MiniPlayerBar(
-                    episode = it,
-                    artworkUrl = currentArtworkUrl,
-                    playerState = playerState,
-                    onPlayPause = { playerViewModel.togglePlayPause() },
-                    onOpenPlayer = onOpenPlayer,
-                    onSeek = { playerViewModel.seekTo(it) }
-                )
-            }
+        currentEpisode?.let {
+            MiniPlayerBar(
+                episode = it,
+                artworkUrl = currentArtworkUrl,
+                playerState = playerState,
+                onPlayPause = { playerViewModel.togglePlayPause() },
+                onOpenPlayer = onOpenPlayer,
+                onSeek = { playerViewModel.seekTo(it) },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            )
         }
     }
+}
+
 }
 
 @Composable
@@ -219,7 +243,9 @@ fun PodcastItem(
     podcast: Podcast,
     onClick: () -> Unit,
     onSaveToggle: (() -> Unit)? = null,
-    isSaved: Boolean = false
+    onQueueAdd: (() -> Unit)? = null,
+    isSaved: Boolean = false,
+    isQueued: Boolean = false
 ) {
     Card(
         modifier = Modifier
@@ -258,10 +284,19 @@ fun PodcastItem(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            onSaveToggle?.let {
+            if (onSaveToggle != null || onQueueAdd != null) {
                 Spacer(modifier = Modifier.width(12.dp))
-                TextButton(onClick = it) {
-                    Text(if (isSaved) "Saved" else "Subscribe")
+                Column(horizontalAlignment = Alignment.End) {
+                    onQueueAdd?.let {
+                        TextButton(onClick = it, enabled = !isQueued) {
+                            Text(if (isQueued) "Queued" else "Queue")
+                        }
+                    }
+                    onSaveToggle?.let {
+                        TextButton(onClick = it) {
+                            Text(if (isSaved) "Saved" else "Subscribe")
+                        }
+                    }
                 }
             }
         }
