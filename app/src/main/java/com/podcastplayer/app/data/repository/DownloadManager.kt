@@ -124,7 +124,7 @@ class DownloadManager(private val context: Context) {
             title = title,
             description = description,
             pubDate = pubDate?.let { Date(it) },
-            audioUrl = localPath,
+            audioUrl = audioUrl,
             duration = duration,
             imageUrl = null,
             isDownloaded = true,

@@ -2,11 +2,13 @@ package com.podcastplayer.app.service
 
 import android.content.ComponentName
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
-import kotlinx.coroutines.guava.await
+import java.io.File
 import java.util.concurrent.Executors
+import kotlinx.coroutines.guava.await
 
 class PlayerController private constructor(context: Context) {
 
@@ -29,8 +31,11 @@ class PlayerController private constructor(context: Context) {
             .build()
 
         val controller = controllerFuture.await()
+        val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let {
+            Uri.fromFile(File(it))
+        } ?: Uri.parse(episode.audioUrl)
         val mediaItem = androidx.media3.common.MediaItem.Builder()
-            .setUri(episode.localPath?.takeIf { episode.isDownloaded } ?: episode.audioUrl)
+            .setUri(mediaUri)
             .setMediaMetadata(metadata)
             .build()
         controller.setMediaItem(mediaItem)

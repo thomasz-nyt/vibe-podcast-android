@@ -10,6 +10,7 @@
 - Mini player artwork sticks to the active episode.
 - Episode IDs now use RSS `guid`/`enclosure` URL to keep list and playback aligned.
 - Download flow exposes progress and disables the button while downloading.
+- Downloaded playback uses file URIs and preserves original stream URLs.
 
 ## Known Warnings/Follow-ups
 - Room: schema export path not set (kapt warning); choose `exportSchema=false` or set `room.schemaLocation`.

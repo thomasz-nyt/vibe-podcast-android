@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
+import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -19,6 +20,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.ui.PlayerNotificationManager
 import com.podcastplayer.app.domain.model.Episode
+import java.io.File
 import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.R
 
@@ -126,8 +128,11 @@ class PlayerService : MediaSessionService() {
             .setArtworkUri(artworkUrl?.let { android.net.Uri.parse(it) })
             .build()
 
+        val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let {
+            Uri.fromFile(File(it))
+        } ?: Uri.parse(episode.audioUrl)
         val mediaItem = MediaItem.Builder()
-            .setUri(episode.localPath?.takeIf { episode.isDownloaded } ?: episode.audioUrl)
+            .setUri(mediaUri)
             .setMediaMetadata(metadata)
             .build()
 
