@@ -20,10 +20,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
+import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.domain.model.PlaybackState
@@ -62,8 +64,12 @@ fun MiniPlayerBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AsyncImage(
-                    model = artworkUrl ?: episode.localPath ?: episode.audioUrl,
+                    // Only ever pass image URLs to Coil. Never pass audio URLs or local audio file paths.
+                    model = episode.imageUrl ?: artworkUrl,
                     contentDescription = episode.title,
+                    placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                    error = painterResource(R.drawable.ic_artwork_placeholder),
+                    fallback = painterResource(R.drawable.ic_artwork_placeholder),
                     modifier = Modifier.size(48.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
