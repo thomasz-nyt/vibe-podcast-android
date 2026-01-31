@@ -37,6 +37,7 @@ fun EpisodeListScreen(
     val episodesState by podcastViewModel.episodesUiState.collectAsState()
     val downloadedEpisodes by podcastViewModel.downloadedEpisodes.collectAsState()
     val downloadProgress by podcastViewModel.downloadProgress.collectAsState()
+    val playbackProgressMap by podcastViewModel.playbackProgress.collectAsState()
     val downloadedIds = remember(downloadedEpisodes) { downloadedEpisodes.map { it.id }.toSet() }
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
@@ -88,11 +89,21 @@ fun EpisodeListScreen(
                             items(state.episodes, key = { it.id }) { episode ->
                                 val isDownloaded = downloadedIds.contains(episode.id) || episode.isDownloaded
                                 val progress = downloadProgress[episode.id]
+
+                                val playback = playbackProgressMap[episode.id]
+                                val isCompleted = playback?.completed == true
+                                val playbackProgress = playback?.let {
+                                    val duration = it.durationMs
+                                    if (duration <= 0L) null else (it.positionMs.toFloat() / duration.toFloat())
+                                }
+
                                 EpisodeItem(
                                     episode = episode,
                                     artworkUrl = podcast?.artworkUrl,
                                     isDownloaded = isDownloaded,
                                     downloadProgress = progress,
+                                    isCompleted = isCompleted,
+                                    playbackProgress = playbackProgress,
                                     onClick = {
                                         playerViewModel.playEpisode(episode, podcast?.artworkUrl)
                                         onPlayEpisode()
@@ -143,6 +154,8 @@ fun EpisodeItem(
     artworkUrl: String?,
     isDownloaded: Boolean,
     downloadProgress: Float?,
+    isCompleted: Boolean,
+    playbackProgress: Float?,
     onClick: () -> Unit,
     onDownload: () -> Unit,
     onDelete: () -> Unit
