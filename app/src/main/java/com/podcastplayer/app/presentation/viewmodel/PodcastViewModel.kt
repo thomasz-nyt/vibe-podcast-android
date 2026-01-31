@@ -155,6 +155,10 @@ class PodcastViewModel(
     fun removeSavedPodcast(podcastId: String) {
         viewModelScope.launch { savedPodcastsStorage.remove(podcastId) }
     }
+
+    fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {
+        viewModelScope.launch { savedPodcastsStorage.move(fromIndex, toIndex) }
+    }
 }
 
 sealed class PodcastUiState {

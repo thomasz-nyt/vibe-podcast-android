@@ -33,6 +33,16 @@ class SavedPodcastsStorage(context: Context) {
         }
     }
 
+    suspend fun move(fromIndex: Int, toIndex: Int) {
+        mutex.withLock {
+            val list = _savedPodcasts.value.toMutableList()
+            if (fromIndex !in list.indices || toIndex !in list.indices) return@withLock
+            val item = list.removeAt(fromIndex)
+            list.add(toIndex, item)
+            persist(list)
+        }
+    }
+
     private fun persist(list: List<Podcast>) {
         prefs.edit().putString(KEY_PODCASTS, gson.toJson(list)).apply()
         _savedPodcasts.value = list

@@ -41,6 +41,7 @@ fun PodcastNavHost() {
                 currentScreen = "search"
                 selectedPodcast = null
             }
+            "queue" -> currentScreen = "search"
         }
     }
 
@@ -54,7 +55,8 @@ fun PodcastNavHost() {
                     podcastViewModel.selectPodcast(podcast)
                     currentScreen = "episodes"
                 },
-                onOpenPlayer = { currentScreen = "player" }
+                onOpenPlayer = { currentScreen = "player" },
+                onOpenQueue = { currentScreen = "queue" }
             )
         }
         "episodes" -> {
@@ -70,6 +72,32 @@ fun PodcastNavHost() {
                     currentScreen = "player"
                 },
                 onOpenPlayer = { currentScreen = "player" }
+            )
+        }
+        "queue" -> {
+            val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+            val currentEpisode by playerViewModel.currentEpisode.collectAsState()
+            val playerState by playerViewModel.playerState.collectAsState()
+            val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
+
+            QueueScreen(
+                podcasts = savedPodcasts,
+                currentEpisode = currentEpisode,
+                currentArtworkUrl = currentArtworkUrl,
+                playerState = playerState,
+                onPlayPause = { playerViewModel.togglePlayPause() },
+                onOpenPlayer = { currentScreen = "player" },
+                onSeek = { playerViewModel.seekTo(it) },
+                onMove = { from, to -> podcastViewModel.moveSavedPodcast(from, to) },
+                onRemove = { podcastId -> podcastViewModel.removeSavedPodcast(podcastId) },
+                onPlayQueue = {
+                    savedPodcasts.firstOrNull()?.let { first ->
+                        selectedPodcast = first
+                        podcastViewModel.selectPodcast(first)
+                        currentScreen = "episodes"
+                    }
+                },
+                onBack = { currentScreen = "search" }
             )
         }
         "player" -> {
