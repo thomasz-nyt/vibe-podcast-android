@@ -1,6 +1,7 @@
 # Android / Gradle
 .gradle/
 build/
+app/build/
 
 # Android SDK path (local)
 local.properties
