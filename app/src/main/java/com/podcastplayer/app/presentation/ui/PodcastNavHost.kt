@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -12,6 +13,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
@@ -39,13 +41,15 @@ private object Routes {
 @Composable
 fun PodcastNavHost() {
     val context = LocalContext.current
+    val db = remember { DatabaseProvider.getDatabase(context) }
 
     // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
     val podcastViewModel: PodcastViewModel = viewModel(
         factory = PodcastViewModelFactory(
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
-            SavedPodcastsStorage(context)
+            SavedPodcastsStorage(context),
+            db.playbackProgressDao()
         )
     )
     val playerViewModel: PlayerViewModel = viewModel(
