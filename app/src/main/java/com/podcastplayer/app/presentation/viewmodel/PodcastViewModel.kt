@@ -2,13 +2,13 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.PlaybackProgressDao
+import com.podcastplayer.app.data.local.PlaybackProgressEntity
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
-import com.podcastplayer.app.domain.model.PlaybackState
-import com.podcastplayer.app.domain.model.PlayerState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
 class PodcastViewModel(
     private val repository: PodcastRepository,
     private val downloadManager: DownloadManager,
-    private val savedPodcastsStorage: SavedPodcastsStorage
+    private val savedPodcastsStorage: SavedPodcastsStorage,
+    private val playbackProgressDao: PlaybackProgressDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PodcastUiState>(PodcastUiState.Initial)
@@ -42,8 +43,12 @@ class PodcastViewModel(
     private val _savedPodcasts = MutableStateFlow<List<Podcast>>(emptyList())
     val savedPodcasts: StateFlow<List<Podcast>> = _savedPodcasts.asStateFlow()
 
+    private val _playbackProgress = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
+    val playbackProgress: StateFlow<Map<String, PlaybackProgressEntity>> = _playbackProgress.asStateFlow()
+
     private var downloadsJob: Job? = null
     private var savedJob: Job? = null
+    private var progressJob: Job? = null
 
     fun searchPodcasts(query: String) {
         if (query.isBlank()) {
@@ -70,6 +75,7 @@ class PodcastViewModel(
     fun selectPodcast(podcast: Podcast) {
         _selectedPodcast.value = podcast
         observeDownloads(podcast)
+        observePlaybackProgress(podcast)
         loadEpisodes(podcast)
     }
 
@@ -79,6 +85,15 @@ class PodcastViewModel(
             downloadManager.getDownloadedEpisodesFlow(podcast.id).collect { episodes ->
                 _downloadedEpisodes.value = episodes
                 refreshEpisodesWithDownloads()
+            }
+        }
+    }
+
+    private fun observePlaybackProgress(podcast: Podcast) {
+        progressJob?.cancel()
+        progressJob = viewModelScope.launch {
+            playbackProgressDao.observeByPodcastId(podcast.id).collect { list ->
+                _playbackProgress.value = list.associateBy { it.episodeId }
             }
         }
     }
@@ -158,6 +173,13 @@ class PodcastViewModel(
 
     fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {
         viewModelScope.launch { savedPodcastsStorage.move(fromIndex, toIndex) }
+    }
+
+    override fun onCleared() {
+        downloadsJob?.cancel()
+        savedJob?.cancel()
+        progressJob?.cancel()
+        super.onCleared()
     }
 }
 

@@ -4,14 +4,9 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.os.Build
-import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import androidx.media.app.NotificationCompat.MediaStyle
 import android.net.Uri
+import android.os.Build
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -19,16 +14,32 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.ui.PlayerNotificationManager
-import com.podcastplayer.app.domain.model.Episode
-import java.io.File
 import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.R
+import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.PlaybackProgressEntity
+import com.podcastplayer.app.domain.model.Episode
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class PlayerService : MediaSessionService() {
 
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
     private var notificationManager: PlayerNotificationManager? = null
+
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Main)
+    private var persistJob: Job? = null
+    private var pendingSeekToMs: Long? = null
+
+    private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(this).playbackProgressDao() }
+
     private val CHANNEL_ID = "podcast_player_channel"
     private val NOTIFICATION_ID = 1
 
@@ -44,7 +55,95 @@ class PlayerService : MediaSessionService() {
             setHandleAudioBecomingNoisy(true)
         }
 
+        player?.addListener(
+            object : Player.Listener {
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val episodeId = mediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
+
+                    serviceScope.launch(Dispatchers.IO) {
+                        val saved = playbackProgressDao.getByEpisodeId(episodeId)
+                        pendingSeekToMs = saved?.takeIf { !it.completed }?.positionMs
+                    }
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY) {
+                        val seek = pendingSeekToMs
+                        if (seek != null && seek > 0) {
+                            pendingSeekToMs = null
+                            player?.seekTo(seek)
+                        }
+                    }
+                    if (playbackState == Player.STATE_ENDED) {
+                        persistProgress(markCompleted = true)
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) {
+                        startPersistLoop()
+                    } else {
+                        stopPersistLoop()
+                        persistProgress(markCompleted = false)
+                    }
+                }
+
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int
+                ) {
+                    // e.g. user scrubs; record sooner.
+                    persistProgress(markCompleted = false)
+                }
+            }
+        )
+
         mediaSession = MediaSession.Builder(this, player!!).build()
+    }
+
+    private fun startPersistLoop() {
+        if (persistJob?.isActive == true) return
+        persistJob = serviceScope.launch {
+            while (true) {
+                persistProgress(markCompleted = false)
+                delay(5_000)
+            }
+        }
+    }
+
+    private fun stopPersistLoop() {
+        persistJob?.cancel()
+        persistJob = null
+    }
+
+    private fun persistProgress(markCompleted: Boolean) {
+        val p = player ?: return
+        val episodeId = p.currentMediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
+        val podcastId = p.mediaMetadata?.artist?.toString().orEmpty()
+
+        val positionMs = p.currentPosition.coerceAtLeast(0)
+        val durationMs = p.duration.coerceAtLeast(0)
+
+        // If duration is unknown, avoid persisting nonsense completion.
+        val shouldComplete = markCompleted || (
+            durationMs > 0 && positionMs >= (durationMs - 2_000)
+        )
+
+        val now = System.currentTimeMillis()
+        val entity = PlaybackProgressEntity(
+            episodeId = episodeId,
+            podcastId = podcastId,
+            positionMs = if (shouldComplete) durationMs else positionMs,
+            durationMs = durationMs,
+            completed = shouldComplete,
+            lastPlayedAtMs = now,
+            updatedAtMs = now
+        )
+
+        serviceScope.launch(Dispatchers.IO) {
+            playbackProgressDao.upsert(entity)
+        }
     }
 
     private fun createNotificationChannel() {
@@ -132,6 +231,7 @@ class PlayerService : MediaSessionService() {
             Uri.fromFile(File(it))
         } ?: Uri.parse(episode.audioUrl)
         val mediaItem = MediaItem.Builder()
+            .setMediaId(episode.id)
             .setUri(mediaUri)
             .setMediaMetadata(metadata)
             .build()
@@ -160,6 +260,9 @@ class PlayerService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        stopPersistLoop()
+        persistProgress(markCompleted = false)
+        serviceJob.cancel()
         notificationManager?.setPlayer(null)
         notificationManager = null
         mediaSession?.release()

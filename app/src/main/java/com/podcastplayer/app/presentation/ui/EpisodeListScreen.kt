@@ -183,8 +183,25 @@ fun EpisodeItem(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (isCompleted) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Played",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
+
+            if (!isCompleted && playbackProgress != null && playbackProgress > 0.01f) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = playbackProgress.coerceIn(0f, 1f),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
             if (description.isNotBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(

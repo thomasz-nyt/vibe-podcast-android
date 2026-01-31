@@ -35,6 +35,7 @@ class PlayerController private constructor(context: Context) {
             Uri.fromFile(File(it))
         } ?: Uri.parse(episode.audioUrl)
         val mediaItem = androidx.media3.common.MediaItem.Builder()
+            .setMediaId(episode.id)
             .setUri(mediaUri)
             .setMediaMetadata(metadata)
             .build()
