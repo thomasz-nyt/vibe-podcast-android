@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,6 +32,7 @@ fun PodcastListScreen(
     onPodcastSelected: (Podcast) -> Unit,
     onOpenPlayer: () -> Unit,
     onOpenQueue: () -> Unit,
+    onPlayQueue: () -> Unit,
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
@@ -53,6 +55,9 @@ fun PodcastListScreen(
                 title = { Text("Podcast Player") },
                 actions = {
                     if (!isSearchFocused) {
+                        IconButton(onClick = onPlayQueue, enabled = savedPodcasts.isNotEmpty()) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Play queue")
+                        }
                         TextButton(onClick = onOpenQueue, enabled = savedPodcasts.isNotEmpty()) {
                             Text("Queue")
                         }
@@ -106,7 +111,7 @@ fun PodcastListScreen(
                         if (!isSearchFocused) {
                             item {
                                 Text(
-                                    text = "Saved",
+                                    text = "Subscriptions",
                                     style = MaterialTheme.typography.titleMedium,
                                     modifier = Modifier.padding(vertical = 4.dp)
                                 )

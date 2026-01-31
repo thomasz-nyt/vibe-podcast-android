@@ -24,6 +24,7 @@ import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PlayerViewModel
 import com.podcastplayer.app.presentation.viewmodel.PodcastViewModel
 import com.podcastplayer.app.service.PlayerController
+import kotlinx.coroutines.launch
 
 private object Routes {
     const val Search = "search"
@@ -65,6 +66,7 @@ fun PodcastNavHost() {
         startDestination = Routes.Search
     ) {
         composable(Routes.Search) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
             PodcastListScreen(
                 viewModel = podcastViewModel,
                 playerViewModel = playerViewModel,
@@ -73,7 +75,24 @@ fun PodcastNavHost() {
                     navController.navigate(Routes.episodes(podcast.id))
                 },
                 onOpenPlayer = { navController.navigate(Routes.Player) },
-                onOpenQueue = { navController.navigate(Routes.Queue) }
+                onOpenQueue = { navController.navigate(Routes.Queue) },
+                onPlayQueue = {
+                    // Build a flattened episode list from subscriptions in queue order and start playback.
+                    // If there are no episodes, do nothing.
+                    val podcasts = podcastViewModel.savedPodcasts.value
+                    if (podcasts.isNotEmpty()) {
+                        scope.launch {
+                            val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
+                            if (episodes.isNotEmpty()) {
+                                playerViewModel.playEpisodesQueue(
+                                    episodes = episodes,
+                                    defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
+                                )
+                                navController.navigate(Routes.Player)
+                            }
+                        }
+                    }
+                }
             )
         }
 
@@ -110,6 +129,7 @@ fun PodcastNavHost() {
         }
 
         composable(Routes.Queue) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
             val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
             val currentEpisode by playerViewModel.currentEpisode.collectAsState()
             val playerState by playerViewModel.playerState.collectAsState()
@@ -126,12 +146,16 @@ fun PodcastNavHost() {
                 onMove = { from, to -> podcastViewModel.moveSavedPodcast(from, to) },
                 onRemove = { podcastId -> podcastViewModel.removeSavedPodcast(podcastId) },
                 onPlayQueue = {
-                    savedPodcasts.firstOrNull()?.let { first ->
-                        podcastViewModel.selectPodcast(first)
-                        navController.navigate(Routes.episodes(first.id)) {
-                            // Match previous behavior: Queue -> Episodes should not return to Queue on back.
-                            popUpTo(Routes.Search) { inclusive = false }
-                            launchSingleTop = true
+                    if (savedPodcasts.isNotEmpty()) {
+                        scope.launch {
+                            val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(savedPodcasts)
+                            if (episodes.isNotEmpty()) {
+                                playerViewModel.playEpisodesQueue(
+                                    episodes = episodes,
+                                    defaultArtworkUrl = savedPodcasts.firstOrNull()?.artworkUrl
+                                )
+                                navController.navigate(Routes.Player)
+                            }
                         }
                     }
                 },
