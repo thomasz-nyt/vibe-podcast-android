@@ -30,6 +30,7 @@ fun PodcastListScreen(
     playerViewModel: com.podcastplayer.app.presentation.viewmodel.PlayerViewModel,
     onPodcastSelected: (Podcast) -> Unit,
     onOpenPlayer: () -> Unit,
+    onOpenQueue: () -> Unit,
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
@@ -49,7 +50,14 @@ fun PodcastListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Podcast Player") }
+                title = { Text("Podcast Player") },
+                actions = {
+                    if (!isSearchFocused) {
+                        TextButton(onClick = onOpenQueue, enabled = savedPodcasts.isNotEmpty()) {
+                            Text("Queue")
+                        }
+                    }
+                }
             )
         }
     ) { padding ->
