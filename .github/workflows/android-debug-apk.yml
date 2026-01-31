@@ -1,10 +1,8 @@
 name: Build debug APK
 
 on:
+  # Manual only for now (avoids building APKs on every push/PR)
   workflow_dispatch:
-  push:
-    branches: [ main ]
-  pull_request:
 
 permissions:
   contents: read
