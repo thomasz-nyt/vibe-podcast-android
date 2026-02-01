@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
@@ -29,6 +30,7 @@ import kotlinx.coroutines.launch
 private object Routes {
     const val Search = "search"
     const val Queue = "queue"
+    const val Downloads = "downloads"
     const val Player = "player"
 
     const val EpisodesBase = "episodes"
@@ -50,6 +52,7 @@ fun PodcastNavHost() {
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
             SavedPodcastsStorage(context),
+            QueueStorage(context),
             db.playbackProgressDao()
         )
     )
@@ -67,6 +70,8 @@ fun PodcastNavHost() {
     ) {
         composable(Routes.Search) {
             val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
+
             PodcastListScreen(
                 viewModel = podcastViewModel,
                 playerViewModel = playerViewModel,
@@ -76,10 +81,9 @@ fun PodcastNavHost() {
                 },
                 onOpenPlayer = { navController.navigate(Routes.Player) },
                 onOpenQueue = { navController.navigate(Routes.Queue) },
+                onOpenDownloads = { navController.navigate(Routes.Downloads) },
                 onPlayQueue = {
-                    // Build a flattened episode list from subscriptions in queue order and start playback.
-                    // If there are no episodes, do nothing.
-                    val podcasts = podcastViewModel.savedPodcasts.value
+                    val podcasts = selectedQueuePodcasts
                     if (podcasts.isNotEmpty()) {
                         scope.launch {
                             val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
@@ -130,29 +134,41 @@ fun PodcastNavHost() {
 
         composable(Routes.Queue) {
             val scope = androidx.compose.runtime.rememberCoroutineScope()
-            val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+            val queues by podcastViewModel.queues.collectAsState()
+            val selectedQueueId by podcastViewModel.selectedQueueId.collectAsState()
+            val queuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
             val currentEpisode by playerViewModel.currentEpisode.collectAsState()
             val playerState by playerViewModel.playerState.collectAsState()
             val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
 
             QueueScreen(
-                podcasts = savedPodcasts,
+                queues = queues,
+                selectedQueueId = selectedQueueId,
+                podcasts = queuePodcasts,
                 currentEpisode = currentEpisode,
                 currentArtworkUrl = currentArtworkUrl,
                 playerState = playerState,
+                onSelectQueue = { podcastViewModel.selectQueue(it) },
+                onCreateQueue = { podcastViewModel.createQueue(it) },
+                onRenameQueue = { id, name -> podcastViewModel.renameQueue(id, name) },
+                onDeleteQueue = { podcastViewModel.deleteQueue(it) },
                 onPlayPause = { playerViewModel.togglePlayPause() },
                 onOpenPlayer = { navController.navigate(Routes.Player) },
                 onSeek = { playerViewModel.seekTo(it) },
-                onMove = { from, to -> podcastViewModel.moveSavedPodcast(from, to) },
-                onRemove = { podcastId -> podcastViewModel.removeSavedPodcast(podcastId) },
+                onMove = { from, to ->
+                    selectedQueueId?.let { podcastViewModel.movePodcastInQueue(it, from, to) }
+                },
+                onRemove = { podcastId ->
+                    selectedQueueId?.let { podcastViewModel.removePodcastFromQueue(it, podcastId) }
+                },
                 onPlayQueue = {
-                    if (savedPodcasts.isNotEmpty()) {
+                    if (queuePodcasts.isNotEmpty()) {
                         scope.launch {
-                            val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(savedPodcasts)
+                            val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(queuePodcasts)
                             if (episodes.isNotEmpty()) {
                                 playerViewModel.playEpisodesQueue(
                                     episodes = episodes,
-                                    defaultArtworkUrl = savedPodcasts.firstOrNull()?.artworkUrl
+                                    defaultArtworkUrl = queuePodcasts.firstOrNull()?.artworkUrl
                                 )
                                 navController.navigate(Routes.Player)
                             }
@@ -163,6 +179,21 @@ fun PodcastNavHost() {
                     // Match previous behavior: Queue back always returns to Search.
                     navController.popBackStack(route = Routes.Search, inclusive = false)
                 }
+            )
+        }
+
+        composable(Routes.Downloads) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val downloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
+            DownloadsScreen(
+                downloads = downloads,
+                onDeleteEpisode = { episodeId ->
+                    scope.launch { podcastViewModel.deleteDownload(episodeId) }
+                },
+                onDeleteAll = {
+                    scope.launch { podcastViewModel.deleteAllDownloads() }
+                },
+                onBack = { navController.popBackStack(route = Routes.Search, inclusive = false) }
             )
         }
 

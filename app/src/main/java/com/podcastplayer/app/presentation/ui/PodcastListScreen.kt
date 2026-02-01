@@ -6,9 +6,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PodcastUiState
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +35,7 @@ fun PodcastListScreen(
     onPodcastSelected: (Podcast) -> Unit,
     onOpenPlayer: () -> Unit,
     onOpenQueue: () -> Unit,
+    onOpenDownloads: () -> Unit,
     onPlayQueue: () -> Unit,
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -43,9 +46,17 @@ fun PodcastListScreen(
 
     val uiState by viewModel.uiState.collectAsState()
     val savedPodcasts by viewModel.savedPodcasts.collectAsState()
+    val queues by viewModel.queues.collectAsState()
+    val selectedQueueId by viewModel.selectedQueueId.collectAsState()
+    val selectedQueue = remember(queues, selectedQueueId) {
+        queues.firstOrNull { it.id == selectedQueueId }
+    }
+    val queuePodcasts by viewModel.selectedQueuePodcasts.collectAsState()
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
+    val scope = rememberCoroutineScope()
+    var queuePickerPodcast by remember { mutableStateOf<Podcast?>(null) }
 
     LaunchedEffect(searchQuery) {
         viewModel.searchPodcasts(searchQuery)
@@ -57,11 +68,11 @@ fun PodcastListScreen(
                 title = { Text("Podcast Player") },
                 actions = {
                     if (!isSearchFocused) {
-                        IconButton(onClick = onPlayQueue, enabled = savedPodcasts.isNotEmpty()) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = "Play queue")
+                        IconButton(onClick = onOpenDownloads) {
+                            Icon(Icons.Default.Download, contentDescription = "Downloads")
                         }
-                        TextButton(onClick = onOpenQueue, enabled = savedPodcasts.isNotEmpty()) {
-                            Text("Queue")
+                        TextButton(onClick = onOpenQueue, enabled = queues.isNotEmpty()) {
+                            Text("Queues")
                         }
                     }
                 }
@@ -106,6 +117,16 @@ fun PodcastListScreen(
                     shape = RoundedCornerShape(24.dp)
                 )
 
+                if (showSaved) {
+                    QueuePlayRow(
+                        queues = queues,
+                        selectedQueue = selectedQueue,
+                        onSelectQueue = { viewModel.selectQueue(it) },
+                        onPlayQueue = onPlayQueue,
+                        enabled = queuePodcasts.isNotEmpty()
+                    )
+                }
+
                 Box(
                     modifier = Modifier
                         .weight(1f, fill = true)
@@ -137,6 +158,7 @@ fun PodcastListScreen(
                                             onPodcastSelected(podcast)
                                         },
                                         onSaveToggle = { viewModel.removeSavedPodcast(podcast.id) },
+                                        onAddToQueue = { queuePickerPodcast = podcast },
                                         isSaved = true
                                     )
                                 }
@@ -187,6 +209,7 @@ fun PodcastListScreen(
                                         onSaveToggle = {
                                             if (alreadySaved) viewModel.removeSavedPodcast(podcast.id) else viewModel.savePodcast(podcast)
                                         },
+                                        onAddToQueue = { queuePickerPodcast = podcast },
                                         isSaved = alreadySaved
                                     )
                                 }
@@ -220,6 +243,111 @@ fun PodcastListScreen(
             }
         }
     }
+
+    queuePickerPodcast?.let { podcast ->
+        QueuePickerDialog(
+            podcast = podcast,
+            queues = queues,
+            initialSelectedIds = viewModel.getQueueIdsForPodcast(podcast.id),
+            onConfirm = { selected ->
+                scope.launch { viewModel.setPodcastQueues(podcast, selected) }
+                queuePickerPodcast = null
+            },
+            onDismiss = { queuePickerPodcast = null }
+        )
+    }
+}
+
+@Composable
+private fun QueuePlayRow(
+    queues: List<com.podcastplayer.app.domain.model.PodcastQueue>,
+    selectedQueue: com.podcastplayer.app.domain.model.PodcastQueue?,
+    onSelectQueue: (String) -> Unit,
+    onPlayQueue: () -> Unit,
+    enabled: Boolean
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Box {
+            TextButton(onClick = { expanded = true }, enabled = queues.isNotEmpty()) {
+                Text(selectedQueue?.name ?: "Select queue")
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                queues.forEach { queue ->
+                    DropdownMenuItem(
+                        text = { Text(queue.name) },
+                        onClick = {
+                            expanded = false
+                            onSelectQueue(queue.id)
+                        }
+                    )
+                }
+            }
+        }
+        Button(onClick = onPlayQueue, enabled = enabled) {
+            Text("Play")
+        }
+    }
+}
+
+@Composable
+private fun QueuePickerDialog(
+    podcast: Podcast,
+    queues: List<com.podcastplayer.app.domain.model.PodcastQueue>,
+    initialSelectedIds: Set<String>,
+    onConfirm: (Set<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedIds by remember(podcast) { mutableStateOf(initialSelectedIds.toMutableSet()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add to queue") },
+        text = {
+            if (queues.isEmpty()) {
+                Text("Create a queue first")
+            } else {
+                Column {
+                    queues.forEach { queue ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Checkbox(
+                                checked = selectedIds.contains(queue.id),
+                                onCheckedChange = { checked ->
+                                    if (checked) {
+                                        selectedIds.add(queue.id)
+                                    } else {
+                                        selectedIds.remove(queue.id)
+                                    }
+                                }
+                            )
+                            Text(queue.name)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selectedIds) }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
@@ -265,6 +393,7 @@ fun PodcastItem(
     podcast: Podcast,
     onClick: () -> Unit,
     onSaveToggle: (() -> Unit)? = null,
+    onAddToQueue: (() -> Unit)? = null,
     isSaved: Boolean = false,
 ) {
     Card(
@@ -308,6 +437,12 @@ fun PodcastItem(
                 Spacer(modifier = Modifier.width(12.dp))
                 TextButton(onClick = it) {
                     Text(if (isSaved) "Saved" else "Subscribe")
+                }
+            }
+            onAddToQueue?.let {
+                Spacer(modifier = Modifier.width(4.dp))
+                TextButton(onClick = it) {
+                    Text("Queue")
                 }
             }
         }
