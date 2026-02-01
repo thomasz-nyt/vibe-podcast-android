@@ -92,11 +92,6 @@ fun PodcastListScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f, fill = true)
-                        .pointerInput(isSearchFocused) {
-                            if (isSearchFocused) {
-                                detectTapGestures(onTap = { focusManager.clearFocus() })
-                            }
-                        }
                 ) {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
@@ -120,7 +115,10 @@ fun PodcastListScreen(
                                 items(savedPodcasts) { podcast ->
                                     PodcastItem(
                                         podcast = podcast,
-                                        onClick = { onPodcastSelected(podcast) },
+                                        onClick = {
+                                            focusManager.clearFocus()
+                                            onPodcastSelected(podcast)
+                                        },
                                         onSaveToggle = { viewModel.removeSavedPodcast(podcast.id) },
                                         isSaved = true
                                     )
@@ -165,7 +163,10 @@ fun PodcastListScreen(
                                     val alreadySaved = savedPodcasts.any { it.id == podcast.id }
                                     PodcastItem(
                                         podcast = podcast,
-                                        onClick = { onPodcastSelected(podcast) },
+                                        onClick = {
+                                            focusManager.clearFocus()
+                                            onPodcastSelected(podcast)
+                                        },
                                         onSaveToggle = {
                                             if (alreadySaved) viewModel.removeSavedPodcast(podcast.id) else viewModel.savePodcast(podcast)
                                         },
