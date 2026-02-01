@@ -281,7 +281,7 @@ class PodcastViewModel(
 
     /**
      * Build a flattened list of unplayed episodes for the given podcasts, in the same podcast order.
-     * Within each podcast, episodes are ordered oldest -> newest (when pubDate is available).
+     * Within each podcast, episodes are ordered newest -> oldest (when pubDate is available).
      */
     suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
         return withContext(Dispatchers.IO) {
@@ -298,7 +298,7 @@ class PodcastViewModel(
 
                 val unplayed = episodes
                     .filter { ep -> progressByEpisodeId[ep.id]?.completed != true }
-                    .sortedWith(compareBy<Episode> { it.pubDate == null }.thenBy { it.pubDate })
+                    .sortedWith(compareByDescending<Episode> { it.pubDate?.time ?: Long.MIN_VALUE })
 
                 result.addAll(unplayed)
             }
