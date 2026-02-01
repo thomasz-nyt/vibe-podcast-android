@@ -241,6 +241,7 @@ fun SavedEmptyStateCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PodcastItem(
     podcast: Podcast,
@@ -249,6 +250,7 @@ fun PodcastItem(
     isSaved: Boolean = false,
 ) {
     Card(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
