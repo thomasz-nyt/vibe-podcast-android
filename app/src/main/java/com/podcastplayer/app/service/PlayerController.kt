@@ -22,7 +22,10 @@ class PlayerController private constructor(context: Context) {
 
     private val executor = Executors.newSingleThreadExecutor()
 
-    suspend fun playEpisode(episode: com.podcastplayer.app.domain.model.Episode, artworkUrl: String?) {
+    private fun episodeToMediaItem(
+        episode: com.podcastplayer.app.domain.model.Episode,
+        artworkUrl: String?
+    ): androidx.media3.common.MediaItem {
         val metadata = androidx.media3.common.MediaMetadata.Builder()
             .setTitle(episode.title)
             .setArtist(episode.podcastId)
@@ -30,16 +33,39 @@ class PlayerController private constructor(context: Context) {
             .setArtworkUri(artworkUrl?.let { android.net.Uri.parse(it) })
             .build()
 
-        val controller = controllerFuture.await()
         val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let {
             Uri.fromFile(File(it))
         } ?: Uri.parse(episode.audioUrl)
-        val mediaItem = androidx.media3.common.MediaItem.Builder()
+
+        return androidx.media3.common.MediaItem.Builder()
             .setMediaId(episode.id)
             .setUri(mediaUri)
             .setMediaMetadata(metadata)
             .build()
-        controller.setMediaItem(mediaItem)
+    }
+
+    suspend fun playEpisode(episode: com.podcastplayer.app.domain.model.Episode, artworkUrl: String?) {
+        val controller = controllerFuture.await()
+        controller.setMediaItem(episodeToMediaItem(episode, artworkUrl))
+        controller.prepare()
+        controller.play()
+    }
+
+    suspend fun playEpisodes(
+        episodes: List<com.podcastplayer.app.domain.model.Episode>,
+        defaultArtworkUrl: String?
+    ) {
+        if (episodes.isEmpty()) return
+
+        val controller = controllerFuture.await()
+        val items = episodes.map { episode ->
+            episodeToMediaItem(
+                episode = episode,
+                artworkUrl = episode.imageUrl ?: defaultArtworkUrl
+            )
+        }
+
+        controller.setMediaItems(items)
         controller.prepare()
         controller.play()
     }

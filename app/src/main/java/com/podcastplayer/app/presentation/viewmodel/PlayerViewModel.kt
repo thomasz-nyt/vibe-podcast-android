@@ -54,6 +54,28 @@ class PlayerViewModel(
         }
     }
 
+    fun playEpisodesQueue(episodes: List<Episode>, defaultArtworkUrl: String?) {
+        if (episodes.isEmpty()) return
+
+        viewModelScope.launch {
+            val first = episodes.first()
+            _currentEpisode.value = first
+            _currentArtworkUrl.value = first.imageUrl ?: defaultArtworkUrl
+            _playerState.value = _playerState.value.copy(
+                state = PlaybackState.LOADING,
+                currentEpisode = first
+            )
+
+            try {
+                playerController.playEpisodes(episodes, defaultArtworkUrl)
+                _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
+                startPositionUpdates()
+            } catch (e: Exception) {
+                _playerState.value = _playerState.value.copy(state = PlaybackState.ERROR)
+            }
+        }
+    }
+
     fun togglePlayPause() {
         viewModelScope.launch {
             val currentState = _playerState.value.state

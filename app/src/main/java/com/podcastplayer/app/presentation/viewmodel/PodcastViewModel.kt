@@ -13,7 +13,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PodcastViewModel(
     private val repository: PodcastRepository,
@@ -173,6 +175,34 @@ class PodcastViewModel(
 
     fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {
         viewModelScope.launch { savedPodcastsStorage.move(fromIndex, toIndex) }
+    }
+
+    /**
+     * Build a flattened list of unplayed episodes for the given podcasts, in the same podcast order.
+     * Within each podcast, episodes are ordered oldest -> newest (when pubDate is available).
+     */
+    suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
+        return withContext(Dispatchers.IO) {
+            val result = mutableListOf<Episode>()
+
+            for (podcast in podcasts) {
+                val feedUrl = podcast.feedUrl ?: continue
+
+                val episodes = repository.getEpisodes(feedUrl, podcast.id).getOrNull().orEmpty()
+                if (episodes.isEmpty()) continue
+
+                val progressByEpisodeId = playbackProgressDao.getByPodcastId(podcast.id)
+                    .associateBy { it.episodeId }
+
+                val unplayed = episodes
+                    .filter { ep -> progressByEpisodeId[ep.id]?.completed != true }
+                    .sortedWith(compareBy<Episode> { it.pubDate == null }.thenBy { it.pubDate })
+
+                result.addAll(unplayed)
+            }
+
+            result
+        }
     }
 
     override fun onCleared() {
