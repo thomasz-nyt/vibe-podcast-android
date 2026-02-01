@@ -85,6 +85,12 @@ class DownloadManager(private val context: Context) {
         }
     }
 
+    fun getAllDownloadedEpisodesFlow(): Flow<List<Episode>> {
+        return dao.getAllEpisodes().map { list ->
+            list.map { it.toDomain() }
+        }
+    }
+
     suspend fun deleteEpisode(episodeId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val episode = dao.getEpisodeById(episodeId)
@@ -95,6 +101,22 @@ class DownloadManager(private val context: Context) {
                 }
                 dao.deleteEpisodeById(episodeId)
             }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteAllDownloads(): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val episodes = dao.getAllEpisodes().first()
+            episodes.forEach { episode ->
+                val file = File(episode.localPath)
+                if (file.exists()) {
+                    file.delete()
+                }
+            }
+            dao.deleteAll()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

@@ -3,6 +3,7 @@ package com.podcastplayer.app.presentation.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.podcastplayer.app.data.local.PlaybackProgressDao
+import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.PodcastRepository
 
@@ -10,6 +11,7 @@ class PodcastViewModelFactory(
     private val repository: PodcastRepository,
     private val downloadManager: com.podcastplayer.app.data.repository.DownloadManager,
     private val savedPodcastsStorage: SavedPodcastsStorage,
+    private val queueStorage: QueueStorage,
     private val playbackProgressDao: PlaybackProgressDao
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
@@ -19,6 +21,7 @@ class PodcastViewModelFactory(
                 repository,
                 downloadManager,
                 savedPodcastsStorage,
+                queueStorage,
                 playbackProgressDao
             ) as T
         }
