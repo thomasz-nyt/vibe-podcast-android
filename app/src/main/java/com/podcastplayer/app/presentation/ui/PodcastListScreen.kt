@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -38,6 +39,7 @@ fun PodcastListScreen(
     var isSearchFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val showSaved = !isSearchFocused || searchQuery.isBlank()
 
     val uiState by viewModel.uiState.collectAsState()
     val savedPodcasts by viewModel.savedPodcasts.collectAsState()
@@ -70,6 +72,9 @@ fun PodcastListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { focusManager.clearFocus() })
+                }
         ) {
             Column(
                 modifier = Modifier.fillMaxSize()
@@ -85,6 +90,18 @@ fun PodcastListScreen(
                     placeholder = { Text("Search podcasts...") },
                     leadingIcon = {
                         Icon(Icons.Default.Search, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotBlank()) {
+                            IconButton(
+                                onClick = {
+                                    searchQuery = ""
+                                    focusManager.clearFocus()
+                                }
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            }
+                        }
                     },
                     shape = RoundedCornerShape(24.dp)
                 )
@@ -103,7 +120,7 @@ fun PodcastListScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (!isSearchFocused) {
+                        if (showSaved) {
                             item {
                                 Text(
                                     text = "Subscriptions",
