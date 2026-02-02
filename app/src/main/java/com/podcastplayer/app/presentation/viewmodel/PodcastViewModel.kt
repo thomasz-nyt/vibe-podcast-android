@@ -299,7 +299,14 @@ class PodcastViewModel(
                     .filter { ep -> progressByEpisodeId[ep.id]?.completed != true }
                     .maxByOrNull { it.pubDate?.time ?: Long.MIN_VALUE }
 
-                latestUnplayed?.let { result.add(it) }
+                latestUnplayed?.let { episode ->
+                    val withArtwork = if (episode.imageUrl == null && podcast.artworkUrl != null) {
+                        episode.copy(imageUrl = podcast.artworkUrl)
+                    } else {
+                        episode
+                    }
+                    result.add(withArtwork)
+                }
             }
 
             result
