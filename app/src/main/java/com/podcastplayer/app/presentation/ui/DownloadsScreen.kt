@@ -1,9 +1,11 @@
 package com.podcastplayer.app.presentation.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -33,12 +35,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.podcastplayer.app.R
 import com.podcastplayer.app.presentation.viewmodel.DownloadedEpisodeUi
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
     downloads: List<DownloadedEpisodeUi>,
+    onPlayEpisode: (DownloadedEpisodeUi) -> Unit,
     onDeleteEpisode: (String) -> Unit,
     onDeleteAll: () -> Unit,
     onBack: () -> Unit
@@ -98,29 +103,49 @@ fun DownloadsScreen(
                 ) {
                     items(downloads, key = { it.episode.id }) { item ->
                         Card(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPlayEpisode(item) },
                             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = item.episode.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AsyncImage(
+                                    model = item.episode.imageUrl ?: item.podcastArtworkUrl,
+                                    contentDescription = item.episode.title,
+                                    modifier = Modifier.size(56.dp),
+                                    placeholder = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                                    error = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                                    fallback = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder)
                                 )
-                                item.podcastTitle?.let {
+
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(start = 12.dp)
+                                ) {
                                     Text(
-                                        text = it,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
+                                        text = item.episode.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    item.podcastTitle?.let {
+                                        Text(
+                                            text = it,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
-                                IconButton(
-                                    onClick = { onDeleteEpisode(item.episode.id) },
-                                    modifier = Modifier.align(Alignment.End)
-                                ) {
+
+                                IconButton(onClick = { onDeleteEpisode(item.episode.id) }) {
                                     Icon(
                                         imageVector = Icons.Default.Delete,
                                         contentDescription = "Delete download",

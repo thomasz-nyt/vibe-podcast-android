@@ -39,6 +39,7 @@ class PlayerService : MediaSessionService() {
     private var pendingSeekToMs: Long? = null
 
     private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(this).playbackProgressDao() }
+    private val playbackSessionStorage by lazy { PlaybackSessionStorage(this) }
 
     private val CHANNEL_ID = "podcast_player_channel"
     private val NOTIFICATION_ID = 1
@@ -64,6 +65,7 @@ class PlayerService : MediaSessionService() {
                         val saved = playbackProgressDao.getByEpisodeId(episodeId)
                         pendingSeekToMs = saved?.takeIf { !it.completed }?.positionMs
                     }
+                    persistPlaybackSession(isCompleted = false)
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -76,6 +78,7 @@ class PlayerService : MediaSessionService() {
                     }
                     if (playbackState == Player.STATE_ENDED) {
                         persistProgress(markCompleted = true)
+                        persistPlaybackSession(isCompleted = true)
                     }
                 }
 
@@ -86,6 +89,7 @@ class PlayerService : MediaSessionService() {
                         stopPersistLoop()
                         persistProgress(markCompleted = false)
                     }
+                    persistPlaybackSession(isCompleted = false)
                 }
 
                 override fun onPositionDiscontinuity(
@@ -95,6 +99,7 @@ class PlayerService : MediaSessionService() {
                 ) {
                     // e.g. user scrubs; record sooner.
                     persistProgress(markCompleted = false)
+                    persistPlaybackSession(isCompleted = false)
                 }
             }
         )
@@ -107,6 +112,7 @@ class PlayerService : MediaSessionService() {
         persistJob = serviceScope.launch {
             while (true) {
                 persistProgress(markCompleted = false)
+                persistPlaybackSession(isCompleted = false)
                 delay(5_000)
             }
         }
@@ -115,6 +121,22 @@ class PlayerService : MediaSessionService() {
     private fun stopPersistLoop() {
         persistJob?.cancel()
         persistJob = null
+    }
+
+    private fun persistPlaybackSession(isCompleted: Boolean) {
+        val p = player ?: return
+        val currentIndex = p.currentMediaItemIndex
+        val items = p.currentMediaItems
+        if (items.isEmpty() || currentIndex !in items.indices) return
+
+        playbackSessionStorage.save(
+            items = items,
+            currentIndex = currentIndex,
+            currentPositionMs = p.currentPosition,
+            wasPlaying = p.playWhenReady && p.playbackState != Player.STATE_ENDED,
+            playbackSpeed = p.playbackParameters.speed,
+            isCompleted = isCompleted
+        )
     }
 
     private fun persistProgress(markCompleted: Boolean) {
@@ -262,6 +284,7 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         stopPersistLoop()
         persistProgress(markCompleted = false)
+        persistPlaybackSession(isCompleted = false)
         serviceJob.cancel()
         notificationManager?.setPlayer(null)
         notificationManager = null

@@ -10,7 +10,7 @@ import java.io.File
 import java.util.concurrent.Executors
 import kotlinx.coroutines.guava.await
 
-class PlayerController private constructor(context: Context) {
+class PlayerController private constructor(private val context: Context) {
 
     private val sessionToken = SessionToken(
         context,
@@ -21,6 +21,7 @@ class PlayerController private constructor(context: Context) {
         .buildAsync()
 
     private val executor = Executors.newSingleThreadExecutor()
+    private val playbackSessionStorage = PlaybackSessionStorage(context)
 
     private fun episodeToMediaItem(
         episode: com.podcastplayer.app.domain.model.Episode,
@@ -70,6 +71,10 @@ class PlayerController private constructor(context: Context) {
         controller.play()
     }
 
+    suspend fun play() {
+        controllerFuture.await().play()
+    }
+
     suspend fun pause() {
         val controller = controllerFuture.await()
         controller.pause()
@@ -78,6 +83,26 @@ class PlayerController private constructor(context: Context) {
     suspend fun seekTo(position: Long) {
         val controller = controllerFuture.await()
         controller.seekTo(position)
+    }
+
+    suspend fun skipToPrevious() {
+        val controller = controllerFuture.await()
+        controller.seekToPreviousMediaItem()
+    }
+
+    suspend fun skipToNext() {
+        val controller = controllerFuture.await()
+        controller.seekToNextMediaItem()
+    }
+
+    suspend fun hasPrevious(): Boolean {
+        val controller = controllerFuture.await()
+        return controller.hasPreviousMediaItem()
+    }
+
+    suspend fun hasNext(): Boolean {
+        val controller = controllerFuture.await()
+        return controller.hasNextMediaItem()
     }
 
     suspend fun setPlaybackSpeed(speed: Float) {
@@ -110,6 +135,54 @@ class PlayerController private constructor(context: Context) {
             },
             executor
         )
+    }
+
+    suspend fun isPlaying(): Boolean {
+        return controllerFuture.await().isPlaying
+    }
+
+    suspend fun getCurrentEpisode(): com.podcastplayer.app.domain.model.Episode? {
+        val item = controllerFuture.await().currentMediaItem ?: return null
+        val uri = item.localConfiguration?.uri?.toString().orEmpty()
+        val isLocal = uri.startsWith("file://")
+        return com.podcastplayer.app.domain.model.Episode(
+            id = item.mediaId,
+            podcastId = item.mediaMetadata.artist?.toString().orEmpty(),
+            title = item.mediaMetadata.title?.toString().orEmpty(),
+            description = item.mediaMetadata.description?.toString(),
+            pubDate = null,
+            audioUrl = uri,
+            duration = null,
+            imageUrl = item.mediaMetadata.artworkUri?.toString(),
+            isDownloaded = isLocal,
+            localPath = if (isLocal) item.localConfiguration?.uri?.path else null
+        )
+    }
+
+    suspend fun restoreLastSessionIfNeeded(): com.podcastplayer.app.domain.model.Episode? {
+        val controller = controllerFuture.await()
+        if (controller.currentMediaItems.isNotEmpty()) {
+            return getCurrentEpisode()
+        }
+
+        val session = playbackSessionStorage.load() ?: return null
+        if (session.items.isEmpty()) return null
+
+        controller.setMediaItems(session.items, session.currentIndex, session.currentPositionMs)
+        controller.prepare()
+        controller.playbackParameters = controller.playbackParameters.withSpeed(session.playbackSpeed)
+
+        if (session.wasPlaying && !session.isCompleted) {
+            controller.play()
+        } else {
+            controller.pause()
+        }
+
+        return getCurrentEpisode()
+    }
+
+    suspend fun getCurrentArtworkUrl(): String? {
+        return controllerFuture.await().currentMediaItem?.mediaMetadata?.artworkUri?.toString()
     }
 
     fun release() {
