@@ -161,7 +161,7 @@ class PlayerController private constructor(private val context: Context) {
 
     suspend fun restoreLastSessionIfNeeded(): com.podcastplayer.app.domain.model.Episode? {
         val controller = controllerFuture.await()
-        if (controller.currentMediaItems.isNotEmpty()) {
+        if (controller.mediaItemCount > 0) {
             return getCurrentEpisode()
         }
 

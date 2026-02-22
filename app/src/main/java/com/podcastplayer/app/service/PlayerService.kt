@@ -126,8 +126,9 @@ class PlayerService : MediaSessionService() {
     private fun persistPlaybackSession(isCompleted: Boolean) {
         val p = player ?: return
         val currentIndex = p.currentMediaItemIndex
-        val items = p.currentMediaItems
-        if (items.isEmpty() || currentIndex !in items.indices) return
+        val mediaItemCount = p.mediaItemCount
+        if (mediaItemCount <= 0 || currentIndex !in 0 until mediaItemCount) return
+        val items = (0 until mediaItemCount).map { index -> p.getMediaItemAt(index) }
 
         playbackSessionStorage.save(
             items = items,
