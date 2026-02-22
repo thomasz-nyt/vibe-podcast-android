@@ -1,16 +1,43 @@
 package com.podcastplayer.app.presentation.ui
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.NavigateBefore
+import androidx.compose.material.icons.filled.NavigateNext
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,7 +55,11 @@ fun PlayerScreen(
     playerState: PlayerState,
     artworkUrl: String?,
     sleepTimerRemaining: Long?,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
     onPlayPause: () -> Unit,
+    onPlayPrevious: () -> Unit,
+    onPlayNext: () -> Unit,
     onSeek: (Long) -> Unit,
     onSpeedChange: (Float) -> Unit,
     onSetSleepTimer: (Long) -> Unit,
@@ -58,7 +89,7 @@ fun PlayerScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(modifier = Modifier.height(20.dp))
-            
+
             Box(
                 modifier = Modifier
                     .size(220.dp)
@@ -71,18 +102,18 @@ fun PlayerScreen(
                     modifier = Modifier.size(220.dp)
                 )
             }
-            
+
             Spacer(modifier = Modifier.height(24.dp))
-            
+
             Text(
                 text = episode.title,
                 style = MaterialTheme.typography.headlineSmall,
                 maxLines = 2,
                 textAlign = TextAlign.Center
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodyMedium,
@@ -90,18 +121,18 @@ fun PlayerScreen(
                 maxLines = 4,
                 textAlign = TextAlign.Center
             )
-            
+
             Spacer(modifier = Modifier.height(24.dp))
-            
+
             Slider(
                 value = if (playerState.duration > 0) playerState.currentPosition.toFloat() else 0f,
                 valueRange = 0f..(if (playerState.duration > 0) playerState.duration.toFloat() else 1f),
                 onValueChange = { onSeek(it.toLong()) },
                 modifier = Modifier.fillMaxWidth()
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -201,21 +232,35 @@ fun PlayerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
+                    onClick = onPlayPrevious,
+                    enabled = hasPrevious,
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.NavigateBefore,
+                        contentDescription = "Previous episode",
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                IconButton(
                     onClick = { onSeek(playerState.currentPosition - 15000) },
-                    modifier = Modifier.size(96.dp)
+                    modifier = Modifier.size(76.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.FastRewind,
                         contentDescription = "Rewind 15s",
-                        modifier = Modifier.size(52.dp)
+                        modifier = Modifier.size(40.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
                 FloatingActionButton(
                     onClick = onPlayPause,
-                    modifier = Modifier.size(128.dp)
+                    modifier = Modifier.size(96.dp)
                 ) {
                     Icon(
                         imageVector = if (playerState.state == com.podcastplayer.app.domain.model.PlaybackState.PLAYING) {
@@ -228,20 +273,34 @@ fun PlayerScreen(
                         } else {
                             "Play"
                         },
-                        modifier = Modifier.size(76.dp)
+                        modifier = Modifier.size(56.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
                 IconButton(
                     onClick = { onSeek(playerState.currentPosition + 30000) },
-                    modifier = Modifier.size(96.dp)
+                    modifier = Modifier.size(76.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.FastForward,
                         contentDescription = "Forward 30s",
-                        modifier = Modifier.size(52.dp)
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                IconButton(
+                    onClick = onPlayNext,
+                    enabled = hasNext,
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.NavigateNext,
+                        contentDescription = "Next episode",
+                        modifier = Modifier.size(36.dp)
                     )
                 }
             }

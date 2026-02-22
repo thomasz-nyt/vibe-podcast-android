@@ -187,6 +187,10 @@ fun PodcastNavHost() {
             val downloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
             DownloadsScreen(
                 downloads = downloads,
+                onPlayEpisode = { item ->
+                    playerViewModel.playEpisode(item.episode, item.podcastArtworkUrl)
+                    navController.navigate(Routes.Player)
+                },
                 onDeleteEpisode = { episodeId ->
                     scope.launch { podcastViewModel.deleteDownload(episodeId) }
                 },
@@ -202,6 +206,8 @@ fun PodcastNavHost() {
             val playerState by playerViewModel.playerState.collectAsState()
             val sleepTimerRemaining by playerViewModel.sleepTimerRemaining.collectAsState()
             val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
+            val hasPrevious by playerViewModel.hasPrevious.collectAsState()
+            val hasNext by playerViewModel.hasNext.collectAsState()
             val selectedPodcast by podcastViewModel.selectedPodcast.collectAsState()
 
             fun goToEpisodesOrSearch() {
@@ -221,18 +227,30 @@ fun PodcastNavHost() {
                 goToEpisodesOrSearch()
             }
 
-            PlayerScreen(
-                episode = currentEpisode ?: Episode("", "", "", null, null, "", null, null),
-                playerState = playerState,
-                artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
-                sleepTimerRemaining = sleepTimerRemaining,
-                onPlayPause = { playerViewModel.togglePlayPause() },
-                onSeek = { playerViewModel.seekTo(it) },
-                onSpeedChange = { playerViewModel.setPlaybackSpeed(it) },
-                onSetSleepTimer = { playerViewModel.setSleepTimer(it) },
-                onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
-                onDismiss = { goToEpisodesOrSearch() }
-            )
+            currentEpisode?.let { episode ->
+                PlayerScreen(
+                    episode = episode,
+                    playerState = playerState,
+                    artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
+                    sleepTimerRemaining = sleepTimerRemaining,
+                    hasPrevious = hasPrevious,
+                    hasNext = hasNext,
+                    onPlayPause = { playerViewModel.togglePlayPause() },
+                    onPlayPrevious = { playerViewModel.playPrevious() },
+                    onPlayNext = { playerViewModel.playNext() },
+                    onSeek = { playerViewModel.seekTo(it) },
+                    onSpeedChange = { playerViewModel.setPlaybackSpeed(it) },
+                    onSetSleepTimer = { playerViewModel.setSleepTimer(it) },
+                    onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
+                    onDismiss = { goToEpisodesOrSearch() }
+                )
+            }
+
+            if (currentEpisode == null) {
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                }
+            }
         }
     }
 }

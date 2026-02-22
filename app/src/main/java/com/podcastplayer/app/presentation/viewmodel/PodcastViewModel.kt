@@ -81,7 +81,8 @@ class PodcastViewModel(
         episodes.map { episode ->
             DownloadedEpisodeUi(
                 episode = episode,
-                podcastTitle = map[episode.podcastId]?.title
+                podcastTitle = map[episode.podcastId]?.title,
+                podcastArtworkUrl = map[episode.podcastId]?.artworkUrl
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -323,7 +324,8 @@ class PodcastViewModel(
 
 data class DownloadedEpisodeUi(
     val episode: Episode,
-    val podcastTitle: String?
+    val podcastTitle: String?,
+    val podcastArtworkUrl: String?
 )
 
 sealed class PodcastUiState {
