@@ -280,8 +280,7 @@ class PodcastViewModel(
     }
 
     /**
-     * Build a flattened list of unplayed episodes for the given podcasts, in the same podcast order.
-     * Within each podcast, episodes are ordered newest -> oldest (when pubDate is available).
+     * Build a list containing the latest unplayed episode from each podcast (queue order preserved).
      */
     suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
         return withContext(Dispatchers.IO) {
@@ -296,11 +295,18 @@ class PodcastViewModel(
                 val progressByEpisodeId = playbackProgressDao.getByPodcastId(podcast.id)
                     .associateBy { it.episodeId }
 
-                val unplayed = episodes
+                val latestUnplayed = episodes
                     .filter { ep -> progressByEpisodeId[ep.id]?.completed != true }
-                    .sortedWith(compareByDescending<Episode> { it.pubDate?.time ?: Long.MIN_VALUE })
+                    .maxByOrNull { it.pubDate?.time ?: Long.MIN_VALUE }
 
-                result.addAll(unplayed)
+                latestUnplayed?.let { episode ->
+                    val withArtwork = if (episode.imageUrl == null && podcast.artworkUrl != null) {
+                        episode.copy(imageUrl = podcast.artworkUrl)
+                    } else {
+                        episode
+                    }
+                    result.add(withArtwork)
+                }
             }
 
             result

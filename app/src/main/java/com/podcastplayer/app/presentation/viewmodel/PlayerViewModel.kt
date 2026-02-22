@@ -2,6 +2,8 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
@@ -31,11 +33,24 @@ class PlayerViewModel(
 
     private var sleepTimerJob: Job? = null
 
+    private var queueEpisodes: Map<String, Episode> = emptyMap()
+    private var queueDefaultArtworkUrl: String? = null
+
+    init {
+        playerController.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val episodeId = mediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
+                val episode = queueEpisodes[episodeId] ?: return
+                updateCurrentEpisode(episode, queueDefaultArtworkUrl)
+            }
+        })
+    }
 
     fun playEpisode(episode: Episode, artworkUrl: String?) {
         viewModelScope.launch {
-            _currentEpisode.value = episode
-            _currentArtworkUrl.value = episode.imageUrl ?: artworkUrl
+            queueEpisodes = emptyMap()
+            queueDefaultArtworkUrl = null
+            updateCurrentEpisode(episode, artworkUrl)
             _playerState.value = _playerState.value.copy(
                 state = PlaybackState.LOADING,
                 currentEpisode = episode
@@ -58,9 +73,11 @@ class PlayerViewModel(
         if (episodes.isEmpty()) return
 
         viewModelScope.launch {
+            queueEpisodes = episodes.associateBy { it.id }
+            queueDefaultArtworkUrl = defaultArtworkUrl
+
             val first = episodes.first()
-            _currentEpisode.value = first
-            _currentArtworkUrl.value = first.imageUrl ?: defaultArtworkUrl
+            updateCurrentEpisode(first, defaultArtworkUrl)
             _playerState.value = _playerState.value.copy(
                 state = PlaybackState.LOADING,
                 currentEpisode = first
@@ -157,6 +174,12 @@ class PlayerViewModel(
                 }
             }
         }
+    }
+
+    private fun updateCurrentEpisode(episode: Episode, artworkUrl: String?) {
+        _currentEpisode.value = episode
+        _currentArtworkUrl.value = episode.imageUrl ?: artworkUrl
+        _playerState.value = _playerState.value.copy(currentEpisode = episode)
     }
 
     override fun onCleared() {

@@ -100,6 +100,18 @@ class PlayerController private constructor(context: Context) {
         return controller.playbackState
     }
 
+    fun addListener(listener: Player.Listener) {
+        controllerFuture.addListener(
+            {
+                try {
+                    controllerFuture.get().addListener(listener)
+                } catch (_: Exception) {
+                }
+            },
+            executor
+        )
+    }
+
     fun release() {
         MediaController.releaseFuture(controllerFuture)
         executor.shutdown()
