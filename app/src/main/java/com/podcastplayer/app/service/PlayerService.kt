@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -52,8 +54,14 @@ class PlayerService : MediaSessionService() {
     }
 
     private fun initializePlayer() {
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+            .build()
+
         player = ExoPlayer.Builder(this).build().apply {
             setHandleAudioBecomingNoisy(true)
+            setAudioAttributes(audioAttributes, /* handleAudioFocus= */ true)
         }
 
         player?.addListener(
