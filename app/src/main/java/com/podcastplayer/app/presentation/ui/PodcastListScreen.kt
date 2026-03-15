@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.domain.model.Podcast
+import com.podcastplayer.app.presentation.viewmodel.OpmlResult
 import com.podcastplayer.app.presentation.viewmodel.PodcastUiState
 import kotlinx.coroutines.launch
 
@@ -37,6 +39,8 @@ fun PodcastListScreen(
     onOpenQueue: () -> Unit,
     onOpenDownloads: () -> Unit,
     onPlayQueue: () -> Unit,
+    onExportOpml: () -> Unit = {},
+    onImportOpml: () -> Unit = {},
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
@@ -57,12 +61,26 @@ fun PodcastListScreen(
     val playerState by playerViewModel.playerState.collectAsState()
     val scope = rememberCoroutineScope()
     var queuePickerPodcast by remember { mutableStateOf<Podcast?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val opmlResult by viewModel.opmlResult.collectAsState()
+
+    LaunchedEffect(opmlResult) {
+        val result = opmlResult ?: return@LaunchedEffect
+        val message = when (result) {
+            is OpmlResult.ExportSuccess -> "Exported ${result.count} subscriptions"
+            is OpmlResult.ImportSuccess -> "Imported ${result.count} subscriptions"
+            is OpmlResult.Error -> "Error: ${result.message}"
+        }
+        snackbarHostState.showSnackbar(message)
+        viewModel.clearOpmlResult()
+    }
 
     LaunchedEffect(searchQuery) {
         viewModel.searchPodcasts(searchQuery)
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Podcast Player") },
@@ -73,6 +91,25 @@ fun PodcastListScreen(
                         }
                         TextButton(onClick = onOpenQueue, enabled = queues.isNotEmpty()) {
                             Text("Queues")
+                        }
+                        Box {
+                            var showOverflow by remember { mutableStateOf(false) }
+                            IconButton(onClick = { showOverflow = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "More options")
+                            }
+                            DropdownMenu(
+                                expanded = showOverflow,
+                                onDismissRequest = { showOverflow = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Export subscriptions") },
+                                    onClick = { showOverflow = false; onExportOpml() }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Import subscriptions") },
+                                    onClick = { showOverflow = false; onImportOpml() }
+                                )
+                            }
                         }
                     }
                 }

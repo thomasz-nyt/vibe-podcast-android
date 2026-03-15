@@ -2,10 +2,13 @@ package com.podcastplayer.app.presentation.ui
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -63,6 +66,32 @@ fun PodcastNavHost() {
     )
 
     val navController = rememberNavController()
+    val contentResolver = context.contentResolver
+    val opmlScope = rememberCoroutineScope()
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/x-opml")
+    ) { uri ->
+        uri?.let {
+            opmlScope.launch {
+                contentResolver.openOutputStream(it)?.use { os ->
+                    podcastViewModel.exportOpml(os)
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            opmlScope.launch {
+                contentResolver.openInputStream(it)?.use { inputStream ->
+                    podcastViewModel.importOpml(inputStream)
+                }
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -96,6 +125,10 @@ fun PodcastNavHost() {
                             }
                         }
                     }
+                },
+                onExportOpml = { exportLauncher.launch("vibe-podcasts.opml") },
+                onImportOpml = {
+                    importLauncher.launch(arrayOf("text/x-opml", "text/xml", "application/xml", "*/*"))
                 }
             )
         }
