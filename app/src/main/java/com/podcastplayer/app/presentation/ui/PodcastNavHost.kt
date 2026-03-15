@@ -25,6 +25,8 @@ import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PlayerViewModel
 import com.podcastplayer.app.presentation.viewmodel.PodcastViewModel
 import com.podcastplayer.app.service.PlayerController
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private object Routes {
@@ -45,6 +47,7 @@ private object Routes {
 fun PodcastNavHost() {
     val context = LocalContext.current
     val db = remember { DatabaseProvider.getDatabase(context) }
+    val queueStorage = remember { QueueStorage(context) }
 
     // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
     val podcastViewModel: PodcastViewModel = viewModel(
@@ -52,7 +55,7 @@ fun PodcastNavHost() {
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
             SavedPodcastsStorage(context),
-            QueueStorage(context),
+            queueStorage,
             db.playbackProgressDao()
         )
     )
@@ -63,6 +66,37 @@ fun PodcastNavHost() {
     )
 
     val navController = rememberNavController()
+
+    // Auto-play Morning queue when app is opened before 8:30 AM
+    LaunchedEffect(Unit) {
+        val now = java.time.LocalTime.now()
+        if (now >= java.time.LocalTime.of(8, 30)) return@LaunchedEffect
+
+        // Wait for session restore in PlayerViewModel.init to complete
+        delay(2000)
+
+        // Don't override an existing/restored session
+        if (playerViewModel.currentEpisode.value != null) return@LaunchedEffect
+
+        // Find "Morning" queue and resolve its podcasts
+        val morningPayload = queueStorage.queues.value
+            .firstOrNull { it.name.equals("Morning", ignoreCase = true) }
+            ?: return@LaunchedEffect
+
+        val savedMap = podcastViewModel.savedPodcasts.value.associateBy { it.id }
+        val podcasts = morningPayload.podcastIds.mapNotNull { savedMap[it] }
+        if (podcasts.isEmpty()) return@LaunchedEffect
+
+        // Build unplayed episodes and start playback
+        val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
+        if (episodes.isNotEmpty()) {
+            playerViewModel.playEpisodesQueue(
+                episodes = episodes,
+                defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
+            )
+            navController.navigate(Routes.Player)
+        }
+    }
 
     NavHost(
         navController = navController,
