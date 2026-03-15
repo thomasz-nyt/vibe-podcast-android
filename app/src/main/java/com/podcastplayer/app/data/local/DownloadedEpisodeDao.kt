@@ -9,6 +9,9 @@ interface DownloadedEpisodeDao {
     @Query("SELECT * FROM downloaded_episodes WHERE podcastId = :podcastId")
     fun getEpisodesByPodcast(podcastId: String): Flow<List<DownloadedEpisodeEntity>>
 
+    @Query("SELECT * FROM downloaded_episodes ORDER BY downloadDate DESC")
+    fun getAllEpisodes(): Flow<List<DownloadedEpisodeEntity>>
+
     @Query("SELECT * FROM downloaded_episodes WHERE id = :episodeId")
     suspend fun getEpisodeById(episodeId: String): DownloadedEpisodeEntity?
 
@@ -23,4 +26,7 @@ interface DownloadedEpisodeDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM downloaded_episodes WHERE id = :episodeId)")
     suspend fun isEpisodeDownloaded(episodeId: String): Boolean
+
+    @Query("DELETE FROM downloaded_episodes")
+    suspend fun deleteAll()
 }

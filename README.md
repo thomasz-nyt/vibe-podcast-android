@@ -54,6 +54,11 @@ app/src/main/java/com/podcastplayer/app/
 ./gradlew assembleDebug
 ```
 
+### JDK
+
+This project expects **JDK 17**. If your system `java` is newer and Gradle fails early, set `JAVA_HOME` to a JDK 17 install (or use a version manager like mise/asdf via `.tool-versions`).
+
+
 ### Install
 
 ```bash

@@ -2,23 +2,33 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.PlaybackProgressDao
+import com.podcastplayer.app.data.local.PlaybackProgressEntity
+import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
-import com.podcastplayer.app.domain.model.PlaybackState
-import com.podcastplayer.app.domain.model.PlayerState
+import com.podcastplayer.app.domain.model.PodcastQueue
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PodcastViewModel(
     private val repository: PodcastRepository,
     private val downloadManager: DownloadManager,
-    private val savedPodcastsStorage: SavedPodcastsStorage
+    private val savedPodcastsStorage: SavedPodcastsStorage,
+    private val queueStorage: QueueStorage,
+    private val playbackProgressDao: PlaybackProgressDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PodcastUiState>(PodcastUiState.Initial)
@@ -42,8 +52,47 @@ class PodcastViewModel(
     private val _savedPodcasts = MutableStateFlow<List<Podcast>>(emptyList())
     val savedPodcasts: StateFlow<List<Podcast>> = _savedPodcasts.asStateFlow()
 
+    private val _selectedQueueId = MutableStateFlow<String?>(null)
+    val selectedQueueId: StateFlow<String?> = _selectedQueueId.asStateFlow()
+
+    val queues: StateFlow<List<PodcastQueue>> = queueStorage.queues
+        .map { list -> list.map { PodcastQueue(it.id, it.name, it.createdAt) } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val selectedQueuePodcasts: StateFlow<List<Podcast>> = combine(
+        queueStorage.queues,
+        _selectedQueueId,
+        savedPodcasts
+    ) { queueList, selectedId, saved ->
+        val queue = queueList.firstOrNull { it.id == selectedId }
+        val savedMap = saved.associateBy { it.id }
+        queue?.podcastIds?.mapNotNull { savedMap[it] } ?: emptyList()
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val downloadedEpisodesAll: StateFlow<List<Episode>> = downloadManager
+        .getAllDownloadedEpisodesFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val downloadedEpisodesUi: StateFlow<List<DownloadedEpisodeUi>> = combine(
+        downloadedEpisodesAll,
+        savedPodcasts
+    ) { episodes, podcasts ->
+        val map = podcasts.associateBy { it.id }
+        episodes.map { episode ->
+            DownloadedEpisodeUi(
+                episode = episode,
+                podcastTitle = map[episode.podcastId]?.title,
+                podcastArtworkUrl = map[episode.podcastId]?.artworkUrl
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _playbackProgress = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
+    val playbackProgress: StateFlow<Map<String, PlaybackProgressEntity>> = _playbackProgress.asStateFlow()
+
     private var downloadsJob: Job? = null
     private var savedJob: Job? = null
+    private var progressJob: Job? = null
 
     fun searchPodcasts(query: String) {
         if (query.isBlank()) {
@@ -65,11 +114,13 @@ class PodcastViewModel(
 
     init {
         observeSaved()
+        observeQueues()
     }
 
     fun selectPodcast(podcast: Podcast) {
         _selectedPodcast.value = podcast
         observeDownloads(podcast)
+        observePlaybackProgress(podcast)
         loadEpisodes(podcast)
     }
 
@@ -83,11 +134,31 @@ class PodcastViewModel(
         }
     }
 
+    private fun observePlaybackProgress(podcast: Podcast) {
+        progressJob?.cancel()
+        progressJob = viewModelScope.launch {
+            playbackProgressDao.observeByPodcastId(podcast.id).collect { list ->
+                _playbackProgress.value = list.associateBy { it.episodeId }
+            }
+        }
+    }
+
     private fun observeSaved() {
         savedJob?.cancel()
         savedJob = viewModelScope.launch {
             savedPodcastsStorage.savedPodcasts.collect { list ->
                 _savedPodcasts.value = list
+            }
+        }
+    }
+
+    private fun observeQueues() {
+        viewModelScope.launch {
+            queueStorage.queues.collect { list ->
+                val selected = _selectedQueueId.value
+                if (list.isNotEmpty() && (selected == null || list.none { it.id == selected })) {
+                    _selectedQueueId.value = list.first().id
+                }
             }
         }
     }
@@ -155,7 +226,107 @@ class PodcastViewModel(
     fun removeSavedPodcast(podcastId: String) {
         viewModelScope.launch { savedPodcastsStorage.remove(podcastId) }
     }
+
+    fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {
+        viewModelScope.launch { savedPodcastsStorage.move(fromIndex, toIndex) }
+    }
+
+    fun selectQueue(queueId: String) {
+        _selectedQueueId.value = queueId
+    }
+
+    fun createQueue(name: String) {
+        viewModelScope.launch {
+            val newId = queueStorage.createQueue(name)
+            _selectedQueueId.value = newId
+        }
+    }
+
+    fun renameQueue(queueId: String, name: String) {
+        viewModelScope.launch { queueStorage.renameQueue(queueId, name) }
+    }
+
+    fun deleteQueue(queueId: String) {
+        viewModelScope.launch { queueStorage.deleteQueue(queueId) }
+    }
+
+    fun addPodcastToQueue(queueId: String, podcast: Podcast) {
+        viewModelScope.launch {
+            savedPodcastsStorage.save(podcast)
+            queueStorage.addPodcast(queueId, podcast.id)
+        }
+    }
+
+    fun removePodcastFromQueue(queueId: String, podcastId: String) {
+        viewModelScope.launch { queueStorage.removePodcast(queueId, podcastId) }
+    }
+
+    fun movePodcastInQueue(queueId: String, fromIndex: Int, toIndex: Int) {
+        viewModelScope.launch { queueStorage.movePodcast(queueId, fromIndex, toIndex) }
+    }
+
+    fun setPodcastQueues(podcast: Podcast, queueIds: Set<String>) {
+        viewModelScope.launch {
+            savedPodcastsStorage.save(podcast)
+            queueStorage.setPodcastQueues(podcast.id, queueIds)
+        }
+    }
+
+    fun getQueueIdsForPodcast(podcastId: String): Set<String> {
+        return queueStorage.getQueuesForPodcast(podcastId)
+    }
+
+    suspend fun deleteAllDownloads(): Result<Unit> {
+        return downloadManager.deleteAllDownloads()
+    }
+
+    /**
+     * Build a list containing the latest unplayed episode from each podcast (queue order preserved).
+     */
+    suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
+        return withContext(Dispatchers.IO) {
+            val result = mutableListOf<Episode>()
+
+            for (podcast in podcasts) {
+                val feedUrl = podcast.feedUrl ?: continue
+
+                val episodes = repository.getEpisodes(feedUrl, podcast.id).getOrNull().orEmpty()
+                if (episodes.isEmpty()) continue
+
+                val progressByEpisodeId = playbackProgressDao.getByPodcastId(podcast.id)
+                    .associateBy { it.episodeId }
+
+                val latestUnplayed = episodes
+                    .filter { ep -> progressByEpisodeId[ep.id]?.completed != true }
+                    .maxByOrNull { it.pubDate?.time ?: Long.MIN_VALUE }
+
+                latestUnplayed?.let { episode ->
+                    val withArtwork = if (episode.imageUrl == null && podcast.artworkUrl != null) {
+                        episode.copy(imageUrl = podcast.artworkUrl)
+                    } else {
+                        episode
+                    }
+                    result.add(withArtwork)
+                }
+            }
+
+            result
+        }
+    }
+
+    override fun onCleared() {
+        downloadsJob?.cancel()
+        savedJob?.cancel()
+        progressJob?.cancel()
+        super.onCleared()
+    }
 }
+
+data class DownloadedEpisodeUi(
+    val episode: Episode,
+    val podcastTitle: String?,
+    val podcastArtworkUrl: String?
+)
 
 sealed class PodcastUiState {
     data object Initial : PodcastUiState()

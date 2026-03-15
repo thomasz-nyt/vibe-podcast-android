@@ -15,7 +15,10 @@ object DatabaseProvider {
                 context.applicationContext,
                 PodcastDatabase::class.java,
                 DATABASE_NAME
-            ).build().also { instance = it }
+            )
+                .addMigrations(PodcastDatabase.MIGRATION_1_2)
+                .build()
+                .also { instance = it }
         }
     }
 }

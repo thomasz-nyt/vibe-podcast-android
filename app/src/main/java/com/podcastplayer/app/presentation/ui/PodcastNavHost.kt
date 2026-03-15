@@ -1,9 +1,20 @@
 package com.podcastplayer.app.presentation.ui
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
@@ -14,15 +25,35 @@ import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PlayerViewModel
 import com.podcastplayer.app.presentation.viewmodel.PodcastViewModel
 import com.podcastplayer.app.service.PlayerController
+import kotlinx.coroutines.launch
+
+private object Routes {
+    const val Search = "search"
+    const val Queue = "queue"
+    const val Downloads = "downloads"
+    const val Player = "player"
+
+    const val EpisodesBase = "episodes"
+    const val PodcastIdArg = "podcastId"
+
+    const val EpisodesPattern = "$EpisodesBase/{$PodcastIdArg}"
+
+    fun episodes(podcastId: String): String = "$EpisodesBase/${Uri.encode(podcastId)}"
+}
 
 @Composable
 fun PodcastNavHost() {
     val context = LocalContext.current
+    val db = remember { DatabaseProvider.getDatabase(context) }
+
+    // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
     val podcastViewModel: PodcastViewModel = viewModel(
         factory = PodcastViewModelFactory(
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
-            SavedPodcastsStorage(context)
+            SavedPodcastsStorage(context),
+            QueueStorage(context),
+            db.playbackProgressDao()
         )
     )
     val playerViewModel: PlayerViewModel = viewModel(
@@ -31,64 +62,195 @@ fun PodcastNavHost() {
         )
     )
 
-    var currentScreen by remember { mutableStateOf("search") }
-    var selectedPodcast by remember { mutableStateOf<Podcast?>(null) }
+    val navController = rememberNavController()
 
-    BackHandler(enabled = currentScreen != "search") {
-        when (currentScreen) {
-            "player" -> currentScreen = "episodes"
-            "episodes" -> {
-                currentScreen = "search"
-                selectedPodcast = null
-            }
-        }
-    }
+    NavHost(
+        navController = navController,
+        startDestination = Routes.Search
+    ) {
+        composable(Routes.Search) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
 
-    when (currentScreen) {
-        "search" -> {
             PodcastListScreen(
                 viewModel = podcastViewModel,
                 playerViewModel = playerViewModel,
-                onPodcastSelected = { podcast ->
-                    selectedPodcast = podcast
+                onPodcastSelected = { podcast: Podcast ->
                     podcastViewModel.selectPodcast(podcast)
-                    currentScreen = "episodes"
+                    navController.navigate(Routes.episodes(podcast.id))
                 },
-                onOpenPlayer = { currentScreen = "player" }
+                onOpenPlayer = { navController.navigate(Routes.Player) },
+                onOpenQueue = { navController.navigate(Routes.Queue) },
+                onOpenDownloads = { navController.navigate(Routes.Downloads) },
+                onPlayQueue = {
+                    val podcasts = selectedQueuePodcasts
+                    if (podcasts.isNotEmpty()) {
+                        scope.launch {
+                            val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
+                            if (episodes.isNotEmpty()) {
+                                playerViewModel.playEpisodesQueue(
+                                    episodes = episodes,
+                                    defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
+                                )
+                                navController.navigate(Routes.Player)
+                            }
+                        }
+                    }
+                }
             )
         }
-        "episodes" -> {
+
+        composable(
+            route = Routes.EpisodesPattern,
+            arguments = listOf(
+                navArgument(Routes.PodcastIdArg) { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            // Ensure the ViewModel is aligned with the route arg (e.g., when navigating here from Queue).
+            val podcastId = backStackEntry.arguments?.getString(Routes.PodcastIdArg)
+            val selectedPodcast by podcastViewModel.selectedPodcast.collectAsState()
+            val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+
+            val podcastForScreen = when {
+                selectedPodcast?.id == podcastId -> selectedPodcast
+                podcastId != null -> savedPodcasts.firstOrNull { it.id == podcastId }?.also {
+                    podcastViewModel.selectPodcast(it)
+                }
+                else -> selectedPodcast
+            }
+
             EpisodeListScreen(
-                podcast = selectedPodcast,
+                podcast = podcastForScreen,
                 podcastViewModel = podcastViewModel,
                 playerViewModel = playerViewModel,
                 onBack = {
-                    currentScreen = "search"
-                    selectedPodcast = null
+                    // Match previous behavior: Episodes back always returns to Search.
+                    navController.popBackStack(route = Routes.Search, inclusive = false)
                 },
-                onPlayEpisode = {
-                    currentScreen = "player"
-                },
-                onOpenPlayer = { currentScreen = "player" }
+                onPlayEpisode = { navController.navigate(Routes.Player) },
+                onOpenPlayer = { navController.navigate(Routes.Player) }
             )
         }
-        "player" -> {
+
+        composable(Routes.Queue) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val queues by podcastViewModel.queues.collectAsState()
+            val selectedQueueId by podcastViewModel.selectedQueueId.collectAsState()
+            val queuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
+            val currentEpisode by playerViewModel.currentEpisode.collectAsState()
+            val playerState by playerViewModel.playerState.collectAsState()
+            val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
+
+            QueueScreen(
+                queues = queues,
+                selectedQueueId = selectedQueueId,
+                podcasts = queuePodcasts,
+                currentEpisode = currentEpisode,
+                currentArtworkUrl = currentArtworkUrl,
+                playerState = playerState,
+                onSelectQueue = { podcastViewModel.selectQueue(it) },
+                onCreateQueue = { podcastViewModel.createQueue(it) },
+                onRenameQueue = { id, name -> podcastViewModel.renameQueue(id, name) },
+                onDeleteQueue = { podcastViewModel.deleteQueue(it) },
+                onPlayPause = { playerViewModel.togglePlayPause() },
+                onOpenPlayer = { navController.navigate(Routes.Player) },
+                onSeek = { playerViewModel.seekTo(it) },
+                onMove = { from, to ->
+                    selectedQueueId?.let { podcastViewModel.movePodcastInQueue(it, from, to) }
+                },
+                onRemove = { podcastId ->
+                    selectedQueueId?.let { podcastViewModel.removePodcastFromQueue(it, podcastId) }
+                },
+                onPlayQueue = {
+                    if (queuePodcasts.isNotEmpty()) {
+                        scope.launch {
+                            val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(queuePodcasts)
+                            if (episodes.isNotEmpty()) {
+                                playerViewModel.playEpisodesQueue(
+                                    episodes = episodes,
+                                    defaultArtworkUrl = queuePodcasts.firstOrNull()?.artworkUrl
+                                )
+                                navController.navigate(Routes.Player)
+                            }
+                        }
+                    }
+                },
+                onBack = {
+                    // Match previous behavior: Queue back always returns to Search.
+                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                }
+            )
+        }
+
+        composable(Routes.Downloads) {
+            val scope = androidx.compose.runtime.rememberCoroutineScope()
+            val downloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
+            DownloadsScreen(
+                downloads = downloads,
+                onPlayEpisode = { item ->
+                    playerViewModel.playEpisode(item.episode, item.podcastArtworkUrl)
+                    navController.navigate(Routes.Player)
+                },
+                onDeleteEpisode = { episodeId ->
+                    scope.launch { podcastViewModel.deleteDownload(episodeId) }
+                },
+                onDeleteAll = {
+                    scope.launch { podcastViewModel.deleteAllDownloads() }
+                },
+                onBack = { navController.popBackStack(route = Routes.Search, inclusive = false) }
+            )
+        }
+
+        composable(Routes.Player) {
             val currentEpisode by playerViewModel.currentEpisode.collectAsState()
             val playerState by playerViewModel.playerState.collectAsState()
             val sleepTimerRemaining by playerViewModel.sleepTimerRemaining.collectAsState()
             val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
-            PlayerScreen(
-                episode = currentEpisode ?: Episode("", "", "", null, null, "", null, null),
-                playerState = playerState,
-                artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
-                sleepTimerRemaining = sleepTimerRemaining,
-                onPlayPause = { playerViewModel.togglePlayPause() },
-                onSeek = { playerViewModel.seekTo(it) },
-                onSpeedChange = { playerViewModel.setPlaybackSpeed(it) },
-                onSetSleepTimer = { playerViewModel.setSleepTimer(it) },
-                onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
-                onDismiss = { currentScreen = "episodes" }
-            )
+            val hasPrevious by playerViewModel.hasPrevious.collectAsState()
+            val hasNext by playerViewModel.hasNext.collectAsState()
+            val selectedPodcast by podcastViewModel.selectedPodcast.collectAsState()
+
+            fun goToEpisodesOrSearch() {
+                val podcastId = selectedPodcast?.id
+                if (podcastId == null) {
+                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                } else {
+                    navController.navigate(Routes.episodes(podcastId)) {
+                        // Match previous behavior: Player back always returns to Episodes (and then to Search).
+                        popUpTo(Routes.Search) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                }
+            }
+
+            BackHandler {
+                goToEpisodesOrSearch()
+            }
+
+            currentEpisode?.let { episode ->
+                PlayerScreen(
+                    episode = episode,
+                    playerState = playerState,
+                    artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
+                    sleepTimerRemaining = sleepTimerRemaining,
+                    hasPrevious = hasPrevious,
+                    hasNext = hasNext,
+                    onPlayPause = { playerViewModel.togglePlayPause() },
+                    onPlayPrevious = { playerViewModel.playPrevious() },
+                    onPlayNext = { playerViewModel.playNext() },
+                    onSeek = { playerViewModel.seekTo(it) },
+                    onSpeedChange = { playerViewModel.setPlaybackSpeed(it) },
+                    onSetSleepTimer = { playerViewModel.setSleepTimer(it) },
+                    onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
+                    onDismiss = { goToEpisodesOrSearch() }
+                )
+            }
+
+            if (currentEpisode == null) {
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                }
+            }
         }
     }
 }

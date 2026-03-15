@@ -10,46 +10,46 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class SavedPodcastsStorage(context: Context) {
+class QueuePodcastsStorage(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val gson = Gson()
     private val mutex = Mutex()
 
-    private val _savedPodcasts = MutableStateFlow(load())
-    val savedPodcasts: StateFlow<List<Podcast>> = _savedPodcasts.asStateFlow()
+    private val _queuePodcasts = MutableStateFlow(load())
+    val queuePodcasts: StateFlow<List<Podcast>> = _queuePodcasts.asStateFlow()
 
-    suspend fun save(podcast: Podcast) {
+    suspend fun add(podcast: Podcast) {
         mutex.withLock {
-            val updated = (_savedPodcasts.value + podcast).distinctBy { it.id }
+            val updated = (_queuePodcasts.value + podcast).distinctBy { it.id }
             persist(updated)
         }
     }
 
     suspend fun remove(podcastId: String) {
         mutex.withLock {
-            val updated = _savedPodcasts.value.filterNot { it.id == podcastId }
+            val updated = _queuePodcasts.value.filterNot { it.id == podcastId }
             persist(updated)
         }
     }
 
     suspend fun move(fromIndex: Int, toIndex: Int) {
         mutex.withLock {
-            val list = _savedPodcasts.value.toMutableList()
-            if (fromIndex !in list.indices || toIndex !in list.indices) return@withLock
-            val item = list.removeAt(fromIndex)
-            list.add(toIndex, item)
-            persist(list)
+            val current = _queuePodcasts.value.toMutableList()
+            if (fromIndex !in current.indices || toIndex !in current.indices) return
+            val item = current.removeAt(fromIndex)
+            current.add(toIndex, item)
+            persist(current)
         }
     }
 
     private fun persist(list: List<Podcast>) {
-        prefs.edit().putString(KEY_PODCASTS, gson.toJson(list)).apply()
-        _savedPodcasts.value = list
+        prefs.edit().putString(KEY_QUEUE, gson.toJson(list)).apply()
+        _queuePodcasts.value = list
     }
 
     private fun load(): List<Podcast> {
-        val json = prefs.getString(KEY_PODCASTS, null) ?: return emptyList()
+        val json = prefs.getString(KEY_QUEUE, null) ?: return emptyList()
         return try {
             val type = object : TypeToken<List<Podcast>>() {}.type
             gson.fromJson(json, type) ?: emptyList()
@@ -59,7 +59,7 @@ class SavedPodcastsStorage(context: Context) {
     }
 
     companion object {
-        private const val PREFS_NAME = "saved_podcasts"
-        private const val KEY_PODCASTS = "podcasts"
+        private const val PREFS_NAME = "queue_podcasts"
+        private const val KEY_QUEUE = "queue"
     }
 }

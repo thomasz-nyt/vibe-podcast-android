@@ -2,6 +2,8 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
@@ -29,13 +31,38 @@ class PlayerViewModel(
     private val _sleepTimerRemaining = MutableStateFlow<Long?>(null)
     val sleepTimerRemaining: StateFlow<Long?> = _sleepTimerRemaining.asStateFlow()
 
+    private val _hasPrevious = MutableStateFlow(false)
+    val hasPrevious: StateFlow<Boolean> = _hasPrevious.asStateFlow()
+
+    private val _hasNext = MutableStateFlow(false)
+    val hasNext: StateFlow<Boolean> = _hasNext.asStateFlow()
+
     private var sleepTimerJob: Job? = null
 
+    private var queueEpisodes: Map<String, Episode> = emptyMap()
+    private var queueDefaultArtworkUrl: String? = null
+
+    init {
+        playerController.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val episodeId = mediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
+                val episode = queueEpisodes[episodeId] ?: return
+                updateCurrentEpisode(episode, queueDefaultArtworkUrl)
+            }
+        })
+
+        viewModelScope.launch {
+            playerController.restoreLastSessionIfNeeded()
+            refreshFromController()
+            startPositionUpdates()
+        }
+    }
 
     fun playEpisode(episode: Episode, artworkUrl: String?) {
         viewModelScope.launch {
-            _currentEpisode.value = episode
-            _currentArtworkUrl.value = episode.imageUrl ?: artworkUrl
+            queueEpisodes = emptyMap()
+            queueDefaultArtworkUrl = null
+            updateCurrentEpisode(episode, artworkUrl)
             _playerState.value = _playerState.value.copy(
                 state = PlaybackState.LOADING,
                 currentEpisode = episode
@@ -45,7 +72,7 @@ class PlayerViewModel(
                 _playerState.value = _playerState.value.copy(
                     state = PlaybackState.PLAYING
                 )
-                startPositionUpdates()
+                refreshFromController()
             } catch (e: Exception) {
                 _playerState.value = _playerState.value.copy(
                     state = PlaybackState.ERROR
@@ -54,28 +81,64 @@ class PlayerViewModel(
         }
     }
 
+    fun playEpisodesQueue(episodes: List<Episode>, defaultArtworkUrl: String?) {
+        if (episodes.isEmpty()) return
+
+        viewModelScope.launch {
+            queueEpisodes = episodes.associateBy { it.id }
+            queueDefaultArtworkUrl = defaultArtworkUrl
+
+            val first = episodes.first()
+            updateCurrentEpisode(first, defaultArtworkUrl)
+            _playerState.value = _playerState.value.copy(
+                state = PlaybackState.LOADING,
+                currentEpisode = first
+            )
+
+            try {
+                playerController.playEpisodes(episodes, defaultArtworkUrl)
+                _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
+                refreshFromController()
+            } catch (e: Exception) {
+                _playerState.value = _playerState.value.copy(state = PlaybackState.ERROR)
+            }
+        }
+    }
+
     fun togglePlayPause() {
         viewModelScope.launch {
-            val currentState = _playerState.value.state
-            val episode = _currentEpisode.value
-            val playbackUrl = episode?.localPath?.takeIf { episode.isDownloaded } ?: episode?.audioUrl.orEmpty()
-            when (currentState) {
+            when (_playerState.value.state) {
                 PlaybackState.PLAYING -> {
                     playerController.pause()
-                    _playerState.value = _playerState.value.copy(
-                        state = PlaybackState.PAUSED
-                    )
+                    _playerState.value = _playerState.value.copy(state = PlaybackState.PAUSED)
                 }
-                PlaybackState.PAUSED -> {
-                    if (playbackUrl.isNotBlank() && episode != null) {
-                        playerController.playEpisode(episode, null)
-                        _playerState.value = _playerState.value.copy(
-                            state = PlaybackState.PLAYING
-                        )
-                    }
+                PlaybackState.PAUSED, PlaybackState.IDLE -> {
+                    playerController.play()
+                    _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
                 }
-                else -> {}
+                else -> Unit
             }
+            refreshFromController()
+        }
+    }
+
+    fun playNext() {
+        viewModelScope.launch {
+            if (!_hasNext.value) return@launch
+            playerController.skipToNext()
+            playerController.play()
+            _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
+            refreshFromController()
+        }
+    }
+
+    fun playPrevious() {
+        viewModelScope.launch {
+            if (!_hasPrevious.value) return@launch
+            playerController.skipToPrevious()
+            playerController.play()
+            _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
+            refreshFromController()
         }
     }
 
@@ -83,7 +146,7 @@ class PlayerViewModel(
         viewModelScope.launch {
             playerController.seekTo(position)
             _playerState.value = _playerState.value.copy(
-                currentPosition = position
+                currentPosition = position.coerceAtLeast(0)
             )
         }
     }
@@ -119,22 +182,44 @@ class PlayerViewModel(
         _sleepTimerRemaining.value = null
     }
 
+    private suspend fun refreshFromController() {
+        val episode = playerController.getCurrentEpisode()
+        _currentEpisode.value = episode
+        _currentArtworkUrl.value = playerController.getCurrentArtworkUrl() ?: episode?.imageUrl
+        _hasPrevious.value = playerController.hasPrevious()
+        _hasNext.value = playerController.hasNext()
+
+        val playbackState = when {
+            playerController.isPlaying() -> PlaybackState.PLAYING
+            episode != null -> PlaybackState.PAUSED
+            else -> PlaybackState.IDLE
+        }
+
+        _playerState.value = _playerState.value.copy(
+            state = playbackState,
+            currentEpisode = episode,
+            currentPosition = playerController.getCurrentPosition().coerceAtLeast(0L),
+            duration = playerController.getDuration().coerceAtLeast(0L)
+        )
+    }
+
     private fun startPositionUpdates() {
         viewModelScope.launch {
-            while (_playerState.value.state == PlaybackState.PLAYING) {
+            while (true) {
                 try {
-                    val position = playerController.getCurrentPosition()
-                    val duration = playerController.getDuration()
-                    _playerState.value = _playerState.value.copy(
-                        currentPosition = position,
-                        duration = duration
-                    )
+                    refreshFromController()
                     kotlinx.coroutines.delay(1000)
                 } catch (e: Exception) {
-                    break
+                    kotlinx.coroutines.delay(2000)
                 }
             }
         }
+    }
+
+    private fun updateCurrentEpisode(episode: Episode, artworkUrl: String?) {
+        _currentEpisode.value = episode
+        _currentArtworkUrl.value = episode.imageUrl ?: artworkUrl
+        _playerState.value = _playerState.value.copy(currentEpisode = episode)
     }
 
     override fun onCleared() {

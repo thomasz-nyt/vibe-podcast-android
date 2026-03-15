@@ -1,0 +1,2 @@
+# Used by asdf/mise. Ensures a compatible Gradle runtime.
+java 17

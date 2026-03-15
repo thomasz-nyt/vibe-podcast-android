@@ -1,6 +1,7 @@
 package com.podcastplayer.app.data.repository
 
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.DownloadedEpisodeDao
@@ -14,7 +15,9 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
+import java.security.MessageDigest
 import java.util.Date
+import java.util.Locale
 
 class DownloadManager(private val context: Context) {
 
@@ -31,7 +34,7 @@ class DownloadManager(private val context: Context) {
         onProgress: (Float) -> Unit = {}
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val fileName = "${episode.id}.mp3"
+            val fileName = buildSafeFileName(episode)
             val localFile = File(downloadDir, fileName)
 
             if (localFile.exists()) {
@@ -82,6 +85,12 @@ class DownloadManager(private val context: Context) {
         }
     }
 
+    fun getAllDownloadedEpisodesFlow(): Flow<List<Episode>> {
+        return dao.getAllEpisodes().map { list ->
+            list.map { it.toDomain() }
+        }
+    }
+
     suspend fun deleteEpisode(episodeId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val episode = dao.getEpisodeById(episodeId)
@@ -98,8 +107,43 @@ class DownloadManager(private val context: Context) {
         }
     }
 
+    suspend fun deleteAllDownloads(): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val episodes = dao.getAllEpisodes().first()
+            episodes.forEach { episode ->
+                val file = File(episode.localPath)
+                if (file.exists()) {
+                    file.delete()
+                }
+            }
+            dao.deleteAll()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun getDownloadedEpisode(episodeId: String): DownloadedEpisodeEntity? {
         return dao.getEpisodeById(episodeId)
+    }
+
+    private fun buildSafeFileName(episode: Episode): String {
+        val source = episode.id.takeIf { it.isNotBlank() } ?: episode.audioUrl
+        val extension = guessExtension(episode.audioUrl) ?: "mp3"
+        val hash = MessageDigest.getInstance("MD5")
+            .digest(source.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "$hash.$extension"
+    }
+
+    private fun guessExtension(url: String): String? {
+        return try {
+            val lastSegment = Uri.parse(url).lastPathSegment ?: return null
+            val ext = lastSegment.substringAfterLast('.', "").lowercase(Locale.US)
+            if (ext.isBlank()) null else ext.takeIf { it.length in 1..5 }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun Episode.toEntity(localPath: String): DownloadedEpisodeEntity {

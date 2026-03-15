@@ -1,17 +1,17 @@
 package com.podcastplayer.app.presentation.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BookmarkAdd
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
-import androidx.compose.material3.Divider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,12 +20,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PodcastUiState
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,18 +35,28 @@ fun PodcastListScreen(
     onPodcastSelected: (Podcast) -> Unit,
     onOpenPlayer: () -> Unit,
     onOpenQueue: () -> Unit,
-    onPlayQueue: () -> Unit
+    onOpenDownloads: () -> Unit,
+    onPlayQueue: () -> Unit,
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var isSearchFocused by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val showSaved = !isSearchFocused || searchQuery.isBlank()
+
     val uiState by viewModel.uiState.collectAsState()
     val savedPodcasts by viewModel.savedPodcasts.collectAsState()
-    val queuePodcasts by viewModel.queuePodcasts.collectAsState()
+    val queues by viewModel.queues.collectAsState()
+    val selectedQueueId by viewModel.selectedQueueId.collectAsState()
+    val selectedQueue = remember(queues, selectedQueueId) {
+        queues.firstOrNull { it.id == selectedQueueId }
+    }
+    val queuePodcasts by viewModel.selectedQueuePodcasts.collectAsState()
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
+    val scope = rememberCoroutineScope()
+    var queuePickerPodcast by remember { mutableStateOf<Podcast?>(null) }
 
     LaunchedEffect(searchQuery) {
         viewModel.searchPodcasts(searchQuery)
@@ -57,11 +67,13 @@ fun PodcastListScreen(
             TopAppBar(
                 title = { Text("Podcast Player") },
                 actions = {
-                    IconButton(onClick = onPlayQueue, enabled = queuePodcasts.isNotEmpty()) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Play queue")
-                    }
-                    IconButton(onClick = onOpenQueue) {
-                        Icon(Icons.Default.QueueMusic, contentDescription = "Open queue")
+                    if (!isSearchFocused) {
+                        IconButton(onClick = onOpenDownloads) {
+                            Icon(Icons.Default.Download, contentDescription = "Downloads")
+                        }
+                        TextButton(onClick = onOpenQueue, enabled = queues.isNotEmpty()) {
+                            Text("Queues")
+                        }
                     }
                 }
             )
@@ -71,134 +83,271 @@ fun PodcastListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = { focusManager.clearFocus() })
+                }
         ) {
             Column(
                 modifier = Modifier.fillMaxSize()
             ) {
                 OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { isSearchFocused = it.isFocused },
-                placeholder = { Text("Search podcasts...") },
-                leadingIcon = {
-                    Icon(Icons.Default.Search, contentDescription = null)
-                },
-                shape = RoundedCornerShape(24.dp)
-            )
-
-            Box(
-                modifier = Modifier
-                    .weight(1f, fill = true)
-                    .pointerInput(isSearchFocused) {
-                        if (isSearchFocused) {
-                            detectTapGestures(onTap = { focusManager.clearFocus() })
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { isSearchFocused = it.isFocused },
+                    placeholder = { Text("Search podcasts...") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null)
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotBlank()) {
+                            IconButton(
+                                onClick = {
+                                    searchQuery = ""
+                                    focusManager.clearFocus()
+                                }
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear search")
+                            }
                         }
-                    }
-            ) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 140.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    },
+                    shape = RoundedCornerShape(24.dp)
+                )
+
+                if (showSaved) {
+                    QueuePlayRow(
+                        queues = queues,
+                        selectedQueue = selectedQueue,
+                        onSelectQueue = { viewModel.selectQueue(it) },
+                        onPlayQueue = onPlayQueue,
+                        enabled = queuePodcasts.isNotEmpty()
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f, fill = true)
                 ) {
-                    if (!isSearchFocused) {
-                        item {
-                            Text(
-                                text = "Saved",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                        }
-                        if (savedPodcasts.isNotEmpty()) {
-                            items(savedPodcasts) { podcast ->
-                                val alreadyQueued = queuePodcasts.any { it.id == podcast.id }
-                                PodcastItem(
-                                    podcast = podcast,
-                                    onClick = { onPodcastSelected(podcast) },
-                                    onSaveToggle = { viewModel.removeSavedPodcast(podcast.id) },
-                                    onQueueAdd = { viewModel.addToQueue(podcast) },
-                                    isSaved = true,
-                                    isQueued = alreadyQueued
-                                )
-                            }
-                        } else {
-                            item {
-                                SavedEmptyStateCard(onBrowse = { focusRequester.requestFocus() })
-                            }
-                        }
-                        item { Divider() }
-                    }
-
-                    when (val state = uiState) {
-                        is PodcastUiState.Initial -> {
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text("Search for podcasts above")
-                                }
-                            }
-                        }
-                        is PodcastUiState.Loading -> {
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator()
-                                }
-                            }
-                        }
-                        is PodcastUiState.Success -> {
-                            items(state.podcasts) { podcast ->
-                                val alreadySaved = savedPodcasts.any { it.id == podcast.id }
-                                PodcastItem(
-                                    podcast = podcast,
-                                    onClick = { onPodcastSelected(podcast) },
-                                    onSaveToggle = {
-                                        if (alreadySaved) viewModel.removeSavedPodcast(podcast.id) else viewModel.savePodcast(podcast)
-                                    },
-                                    isSaved = alreadySaved
-                                )
-                            }
-                        }
-                        is PodcastUiState.Error -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            top = 8.dp,
+                            end = 16.dp,
+                            bottom = 140.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (showSaved) {
                             item {
                                 Text(
-                                    text = "Error: ${state.message}",
-                                    color = MaterialTheme.colorScheme.error
+                                    text = "Subscriptions",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(vertical = 4.dp)
                                 )
+                            }
+                            if (savedPodcasts.isNotEmpty()) {
+                                items(savedPodcasts) { podcast ->
+                                    PodcastItem(
+                                        podcast = podcast,
+                                        onClick = {
+                                            focusManager.clearFocus()
+                                            onPodcastSelected(podcast)
+                                        },
+                                        onSaveToggle = { viewModel.removeSavedPodcast(podcast.id) },
+                                        onAddToQueue = { queuePickerPodcast = podcast },
+                                        isSaved = true
+                                    )
+                                }
+                            } else {
+                                item {
+                                    SavedEmptyStateCard(onBrowse = { focusRequester.requestFocus() })
+                                }
+                            }
+                            item { Divider() }
+                        }
+
+                        when (val state = uiState) {
+                            is PodcastUiState.Initial -> {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 24.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("Search for podcasts above")
+                                    }
+                                }
+                            }
+
+                            is PodcastUiState.Loading -> {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 24.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator()
+                                    }
+                                }
+                            }
+
+                            is PodcastUiState.Success -> {
+                                items(state.podcasts) { podcast ->
+                                    val alreadySaved = savedPodcasts.any { it.id == podcast.id }
+                                    PodcastItem(
+                                        podcast = podcast,
+                                        onClick = {
+                                            focusManager.clearFocus()
+                                            onPodcastSelected(podcast)
+                                        },
+                                        onSaveToggle = {
+                                            if (alreadySaved) viewModel.removeSavedPodcast(podcast.id) else viewModel.savePodcast(podcast)
+                                        },
+                                        onAddToQueue = { queuePickerPodcast = podcast },
+                                        isSaved = alreadySaved
+                                    )
+                                }
+                            }
+
+                            is PodcastUiState.Error -> {
+                                item {
+                                    Text(
+                                        text = "Error: ${state.message}",
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        currentEpisode?.let {
-            MiniPlayerBar(
-                episode = it,
-                artworkUrl = currentArtworkUrl,
-                playerState = playerState,
-                onPlayPause = { playerViewModel.togglePlayPause() },
-                onOpenPlayer = onOpenPlayer,
-                onSeek = { playerViewModel.seekTo(it) },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-            )
+            currentEpisode?.let { episode ->
+                MiniPlayerBar(
+                    episode = episode,
+                    artworkUrl = currentArtworkUrl,
+                    playerState = playerState,
+                    onPlayPause = { playerViewModel.togglePlayPause() },
+                    onOpenPlayer = onOpenPlayer,
+                    onSeek = { positionMs -> playerViewModel.seekTo(positionMs) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+
+    queuePickerPodcast?.let { podcast ->
+        QueuePickerDialog(
+            podcast = podcast,
+            queues = queues,
+            initialSelectedIds = viewModel.getQueueIdsForPodcast(podcast.id),
+            onConfirm = { selected ->
+                scope.launch { viewModel.setPodcastQueues(podcast, selected) }
+                queuePickerPodcast = null
+            },
+            onDismiss = { queuePickerPodcast = null }
+        )
+    }
+}
+
+@Composable
+private fun QueuePlayRow(
+    queues: List<com.podcastplayer.app.domain.model.PodcastQueue>,
+    selectedQueue: com.podcastplayer.app.domain.model.PodcastQueue?,
+    onSelectQueue: (String) -> Unit,
+    onPlayQueue: () -> Unit,
+    enabled: Boolean
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Box {
+            TextButton(onClick = { expanded = true }, enabled = queues.isNotEmpty()) {
+                Text(selectedQueue?.name ?: "Select queue")
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                queues.forEach { queue ->
+                    DropdownMenuItem(
+                        text = { Text(queue.name) },
+                        onClick = {
+                            expanded = false
+                            onSelectQueue(queue.id)
+                        }
+                    )
+                }
+            }
+        }
+        Button(onClick = onPlayQueue, enabled = enabled) {
+            Text("Play")
         }
     }
 }
 
+@Composable
+private fun QueuePickerDialog(
+    podcast: Podcast,
+    queues: List<com.podcastplayer.app.domain.model.PodcastQueue>,
+    initialSelectedIds: Set<String>,
+    onConfirm: (Set<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedIds by remember(podcast) { mutableStateOf(initialSelectedIds.toMutableSet()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add to queue") },
+        text = {
+            if (queues.isEmpty()) {
+                Text("Create a queue first")
+            } else {
+                Column {
+                    queues.forEach { queue ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Checkbox(
+                                checked = selectedIds.contains(queue.id),
+                                onCheckedChange = { checked ->
+                                    if (checked) {
+                                        selectedIds.add(queue.id)
+                                    } else {
+                                        selectedIds.remove(queue.id)
+                                    }
+                                }
+                            )
+                            Text(queue.name)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selectedIds) }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
@@ -238,19 +387,19 @@ fun SavedEmptyStateCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PodcastItem(
     podcast: Podcast,
     onClick: () -> Unit,
     onSaveToggle: (() -> Unit)? = null,
-    onQueueAdd: (() -> Unit)? = null,
+    onAddToQueue: (() -> Unit)? = null,
     isSaved: Boolean = false,
-    isQueued: Boolean = false
 ) {
     Card(
+        onClick = onClick,
         modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
     ) {
         Row(
@@ -284,19 +433,16 @@ fun PodcastItem(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (onSaveToggle != null || onQueueAdd != null) {
+            onSaveToggle?.let {
                 Spacer(modifier = Modifier.width(12.dp))
-                Column(horizontalAlignment = Alignment.End) {
-                    onQueueAdd?.let {
-                        TextButton(onClick = it, enabled = !isQueued) {
-                            Text(if (isQueued) "Queued" else "Queue")
-                        }
-                    }
-                    onSaveToggle?.let {
-                        TextButton(onClick = it) {
-                            Text(if (isSaved) "Saved" else "Subscribe")
-                        }
-                    }
+                TextButton(onClick = it) {
+                    Text(if (isSaved) "Saved" else "Subscribe")
+                }
+            }
+            onAddToQueue?.let {
+                Spacer(modifier = Modifier.width(4.dp))
+                TextButton(onClick = it) {
+                    Text("Queue")
                 }
             }
         }
