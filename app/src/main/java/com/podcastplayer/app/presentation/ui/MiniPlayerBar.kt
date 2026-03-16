@@ -3,6 +3,7 @@ package com.podcastplayer.app.presentation.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,6 +39,7 @@ fun MiniPlayerBar(
     onPlayPause: () -> Unit,
     onOpenPlayer: () -> Unit,
     onSeek: (Long) -> Unit,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var sliderValue by remember(playerState.currentPosition, playerState.duration) {
@@ -100,6 +102,16 @@ fun MiniPlayerBar(
                         imageVector = if (playerState.state == PlaybackState.PLAYING) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (playerState.state == PlaybackState.PLAYING) "Pause" else "Play",
                         modifier = Modifier.size(28.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss player",
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }

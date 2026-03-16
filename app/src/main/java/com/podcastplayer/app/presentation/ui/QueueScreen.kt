@@ -71,6 +71,7 @@ fun QueueScreen(
     onMove: (Int, Int) -> Unit,
     onRemove: (String) -> Unit,
     onPlayQueue: () -> Unit,
+    onDismissPlayer: () -> Unit,
     onBack: () -> Unit
 ) {
     val reorderState = rememberReorderableLazyListState(
@@ -220,6 +221,7 @@ fun QueueScreen(
                     onPlayPause = onPlayPause,
                     onOpenPlayer = onOpenPlayer,
                     onSeek = onSeek,
+                    onDismiss = onDismissPlayer,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(horizontal = 8.dp, vertical = 6.dp)

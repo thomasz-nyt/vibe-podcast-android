@@ -93,6 +93,10 @@ internal class PlaybackSessionStorage(context: Context) {
         }.getOrNull()
     }
 
+    fun clear() {
+        prefs.edit().remove(KEY_SESSION).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "player_session"
         private const val KEY_SESSION = "last_session"
