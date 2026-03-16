@@ -7,7 +7,7 @@ import androidx.media3.common.MediaMetadata
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class StoredPlaybackSession(
+data class StoredPlaybackSession(
     val items: List<MediaItem>,
     val currentIndex: Int,
     val currentPositionMs: Long,
