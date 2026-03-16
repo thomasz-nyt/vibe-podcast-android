@@ -16,7 +16,7 @@ internal data class StoredPlaybackSession(
     val isCompleted: Boolean
 )
 
-internal class PlaybackSessionStorage(context: Context) {
+class PlaybackSessionStorage(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
