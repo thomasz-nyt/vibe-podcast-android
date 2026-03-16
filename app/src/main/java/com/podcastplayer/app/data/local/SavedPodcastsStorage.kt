@@ -33,6 +33,13 @@ class SavedPodcastsStorage(context: Context) {
         }
     }
 
+    suspend fun saveAll(podcasts: List<Podcast>) {
+        mutex.withLock {
+            val updated = (_savedPodcasts.value + podcasts).distinctBy { it.id }
+            persist(updated)
+        }
+    }
+
     suspend fun move(fromIndex: Int, toIndex: Int) {
         mutex.withLock {
             val list = _savedPodcasts.value.toMutableList()

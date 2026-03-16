@@ -2,6 +2,7 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.OpmlManager
 import com.podcastplayer.app.data.local.PlaybackProgressDao
 import com.podcastplayer.app.data.local.PlaybackProgressEntity
 import com.podcastplayer.app.data.local.QueueStorage
@@ -11,6 +12,8 @@ import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.domain.model.PodcastQueue
+import java.io.InputStream
+import java.io.OutputStream
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,6 +92,9 @@ class PodcastViewModel(
 
     private val _playbackProgress = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
     val playbackProgress: StateFlow<Map<String, PlaybackProgressEntity>> = _playbackProgress.asStateFlow()
+
+    private val _opmlResult = MutableStateFlow<OpmlResult?>(null)
+    val opmlResult: StateFlow<OpmlResult?> = _opmlResult.asStateFlow()
 
     private var downloadsJob: Job? = null
     private var savedJob: Job? = null
@@ -280,6 +286,31 @@ class PodcastViewModel(
         return downloadManager.deleteAllDownloads()
     }
 
+    suspend fun exportOpml(outputStream: OutputStream) {
+        withContext(Dispatchers.IO) {
+            OpmlManager.writeOpml(_savedPodcasts.value, outputStream)
+        }.fold(
+            onSuccess = { count -> _opmlResult.value = OpmlResult.ExportSuccess(count) },
+            onFailure = { e -> _opmlResult.value = OpmlResult.Error(e.message ?: "Export failed") }
+        )
+    }
+
+    suspend fun importOpml(inputStream: InputStream) {
+        withContext(Dispatchers.IO) {
+            OpmlManager.readOpml(inputStream)
+        }.fold(
+            onSuccess = { podcasts ->
+                savedPodcastsStorage.saveAll(podcasts)
+                _opmlResult.value = OpmlResult.ImportSuccess(podcasts.size)
+            },
+            onFailure = { e -> _opmlResult.value = OpmlResult.Error(e.message ?: "Import failed") }
+        )
+    }
+
+    fun clearOpmlResult() {
+        _opmlResult.value = null
+    }
+
     /**
      * Build a list containing the latest unplayed episode from each podcast (queue order preserved).
      */
@@ -340,4 +371,10 @@ sealed class EpisodesUiState {
     data object Loading : EpisodesUiState()
     data class Success(val episodes: List<Episode>) : EpisodesUiState()
     data class Error(val message: String) : EpisodesUiState()
+}
+
+sealed class OpmlResult {
+    data class ExportSuccess(val count: Int) : OpmlResult()
+    data class ImportSuccess(val count: Int) : OpmlResult()
+    data class Error(val message: String) : OpmlResult()
 }
