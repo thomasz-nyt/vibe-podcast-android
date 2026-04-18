@@ -1,31 +1,32 @@
 package com.podcastplayer.app.presentation.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,127 +34,94 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.presentation.viewmodel.DownloadedEpisodeUi
+import com.podcastplayer.app.ui.theme.JetBrainsMono
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
     downloads: List<DownloadedEpisodeUi>,
     onPlayEpisode: (DownloadedEpisodeUi) -> Unit,
     onDeleteEpisode: (String) -> Unit,
     onDeleteAll: () -> Unit,
-    onBack: () -> Unit
+    @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
 ) {
     var showDeleteAllDialog by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Downloads") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            VibeTopBar(
+                title = "Downloads",
+                eyebrow = "Offline",
+                actions = {
+                    if (downloads.isNotEmpty()) {
+                        VibeChip(
+                            label = "Remove all",
+                            onClick = { showDeleteAllDialog = true },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Outlined.Delete,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            },
+                        )
                     }
                 },
-                actions = {
-                    TextButton(
-                        onClick = { showDeleteAllDialog = true },
-                        enabled = downloads.isNotEmpty()
-                    ) {
-                        Text("Remove all")
-                    }
-                }
             )
-        }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
+
             if (downloads.isEmpty()) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(horizontal = 16.dp, vertical = 24.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Text("No downloads")
-                    Text(
-                        text = "Download episodes to listen offline",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    VibeEmptyState(
+                        icon = Icons.Outlined.CloudDownload,
+                        title = "No downloads",
+                        subtitle = "Download episodes to listen offline",
                     )
                 }
             } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    VibeSectionEyebrow(text = "Saved episodes", modifier = Modifier.weight(1f))
+                    Text(
+                        text = "${downloads.size}",
+                        fontFamily = JetBrainsMono,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         start = 16.dp,
-                        top = 16.dp,
+                        top = 8.dp,
                         end = 16.dp,
-                        bottom = 140.dp
+                        bottom = 140.dp,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(downloads, key = { it.episode.id }) { item ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPlayEpisode(item) },
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                AsyncImage(
-                                    model = item.episode.imageUrl ?: item.podcastArtworkUrl,
-                                    contentDescription = item.episode.title,
-                                    modifier = Modifier.size(56.dp),
-                                    placeholder = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
-                                    error = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
-                                    fallback = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder)
-                                )
-
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .padding(start = 12.dp)
-                                ) {
-                                    Text(
-                                        text = item.episode.title,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    item.podcastTitle?.let {
-                                        Text(
-                                            text = it,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-
-                                IconButton(onClick = { onDeleteEpisode(item.episode.id) }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Delete,
-                                        contentDescription = "Delete download",
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
+                        DownloadRow(
+                            item = item,
+                            onPlay = { onPlayEpisode(item) },
+                            onDelete = { onDeleteEpisode(item.episode.id) },
+                        )
                     }
                 }
             }
@@ -170,14 +138,86 @@ fun DownloadsScreen(
                     onDeleteAll()
                     showDeleteAllDialog = false
                 }) {
-                    Text("Remove all")
+                    Text("Remove all", fontWeight = FontWeight.SemiBold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteAllDialog = false }) {
                     Text("Cancel")
                 }
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+        )
+    }
+}
+
+@Composable
+private fun DownloadRow(
+    item: DownloadedEpisodeUi,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, shape)
+            .clickable(onClick = onPlay)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncImage(
+            model = item.episode.imageUrl ?: item.podcastArtworkUrl,
+            contentDescription = item.episode.title,
+            modifier = Modifier
+                .size(60.dp)
+                .clip(RoundedCornerShape(10.dp)),
+            placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+            error = painterResource(R.drawable.ic_artwork_placeholder),
+            fallback = painterResource(R.drawable.ic_artwork_placeholder),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            item.podcastTitle?.let {
+                Text(
+                    text = it.uppercase(),
+                    fontFamily = JetBrainsMono,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.4.sp,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
             }
+            Text(
+                text = item.episode.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        VibeCircleIconButton(
+            icon = Icons.Outlined.Delete,
+            description = "Delete download",
+            onClick = onDelete,
+            size = 36.dp,
+            iconSize = 18.dp,
+        )
+        Spacer(Modifier.width(6.dp))
+        VibeCircleIconButton(
+            icon = Icons.Default.PlayArrow,
+            description = "Play",
+            onClick = onPlay,
+            size = 40.dp,
+            iconSize = 22.dp,
+            tinted = true,
         )
     }
 }
