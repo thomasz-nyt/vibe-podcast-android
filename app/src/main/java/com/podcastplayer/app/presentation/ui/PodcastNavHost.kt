@@ -4,16 +4,20 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.podcastplayer.app.data.local.DatabaseProvider
@@ -162,11 +166,33 @@ fun PodcastNavHost() {
         }
     }
 
-    NavHost(
-        navController = navController,
-        startDestination = Routes.Search
-    ) {
-        composable(Routes.Search) {
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val bottomNavRoutes = setOf(Routes.Search, Routes.Queue, Routes.Downloads)
+    val bottomNavTabs = listOf(VibeTab.Search, VibeTab.Queue, VibeTab.Downloads)
+
+    Scaffold(
+        bottomBar = {
+            if (currentRoute in bottomNavRoutes) {
+                VibeBottomNav(
+                    active = currentRoute ?: "",
+                    onNavigate = { tab ->
+                        navController.navigate(tab.id) {
+                            popUpTo(Routes.Search) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    },
+                    tabs = bottomNavTabs,
+                )
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = Routes.Search,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(Routes.Search) {
             val scope = androidx.compose.runtime.rememberCoroutineScope()
             val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
 
@@ -354,6 +380,7 @@ fun PodcastNavHost() {
                     navController.popBackStack(route = Routes.Search, inclusive = false)
                 }
             }
+        }
         }
     }
 }
