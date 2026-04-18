@@ -138,6 +138,7 @@ fun EpisodeListScreen(
                 onPlayPause = { playerViewModel.togglePlayPause() },
                 onOpenPlayer = onOpenPlayer,
                 onSeek = { playerViewModel.seekTo(it) },
+                onDismiss = { playerViewModel.clearPlayer() },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 8.dp, vertical = 6.dp)

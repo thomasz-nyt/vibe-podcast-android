@@ -137,6 +137,12 @@ class PlayerController private constructor(private val context: Context) {
         )
     }
 
+    suspend fun stop() {
+        val controller = controllerFuture.await()
+        controller.stop()
+        controller.clearMediaItems()
+    }
+
     suspend fun isPlaying(): Boolean {
         return controllerFuture.await().isPlaying
     }

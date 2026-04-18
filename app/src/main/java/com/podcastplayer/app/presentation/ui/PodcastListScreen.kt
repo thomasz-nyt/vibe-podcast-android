@@ -273,6 +273,7 @@ fun PodcastListScreen(
                     onPlayPause = { playerViewModel.togglePlayPause() },
                     onOpenPlayer = onOpenPlayer,
                     onSeek = { positionMs -> playerViewModel.seekTo(positionMs) },
+                    onDismiss = { playerViewModel.clearPlayer() },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(horizontal = 8.dp, vertical = 6.dp)
