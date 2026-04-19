@@ -568,7 +568,7 @@ private fun QueuePickerDialog(
     onConfirm: (Set<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var selectedIds by remember(podcast) { mutableStateOf(initialSelectedIds.toMutableSet()) }
+    var selectedIds by remember(podcast) { mutableStateOf(initialSelectedIds) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -580,15 +580,21 @@ private fun QueuePickerDialog(
             } else {
                 Column {
                     queues.forEach { queue ->
+                        val checked = queue.id in selectedIds
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedIds = if (checked) selectedIds - queue.id
+                                    else selectedIds + queue.id
+                                },
                         ) {
                             Checkbox(
-                                checked = selectedIds.contains(queue.id),
-                                onCheckedChange = { checked ->
-                                    if (checked) selectedIds.add(queue.id)
-                                    else selectedIds.remove(queue.id)
+                                checked = checked,
+                                onCheckedChange = { isChecked ->
+                                    selectedIds = if (isChecked) selectedIds + queue.id
+                                    else selectedIds - queue.id
                                 },
                             )
                             Text(queue.name)
