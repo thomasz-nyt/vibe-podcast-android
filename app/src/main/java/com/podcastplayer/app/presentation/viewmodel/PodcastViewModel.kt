@@ -90,6 +90,31 @@ class PodcastViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * In-progress episodes for the Home "Continue listening" shelf. We only have episode
+     * metadata for downloaded episodes (RSS feeds aren't persisted), so this is the
+     * intersection of downloads and in-progress progress entries, most-recent first.
+     */
+    val continueListening: StateFlow<List<ContinueListeningUi>> = combine(
+        downloadedEpisodesUi,
+        playbackProgressDao.observeInProgress()
+    ) { downloads, progress ->
+        val downloadsById = downloads.associateBy { it.episode.id }
+        progress.mapNotNull { entry ->
+            val ui = downloadsById[entry.episodeId] ?: return@mapNotNull null
+            val fraction = if (entry.durationMs > 0L) {
+                (entry.positionMs.toFloat() / entry.durationMs.toFloat()).coerceIn(0f, 1f)
+            } else 0f
+            ContinueListeningUi(
+                episode = ui.episode,
+                podcastTitle = ui.podcastTitle,
+                podcastArtworkUrl = ui.podcastArtworkUrl,
+                progressFraction = fraction,
+                remainingMs = (entry.durationMs - entry.positionMs).coerceAtLeast(0L)
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _playbackProgress = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
     val playbackProgress: StateFlow<Map<String, PlaybackProgressEntity>> = _playbackProgress.asStateFlow()
 
@@ -357,6 +382,14 @@ data class DownloadedEpisodeUi(
     val episode: Episode,
     val podcastTitle: String?,
     val podcastArtworkUrl: String?
+)
+
+data class ContinueListeningUi(
+    val episode: Episode,
+    val podcastTitle: String?,
+    val podcastArtworkUrl: String?,
+    val progressFraction: Float,
+    val remainingMs: Long,
 )
 
 sealed class PodcastUiState {

@@ -39,6 +39,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private object Routes {
+    const val Home = "home"
     const val Search = "search"
     const val Queue = "queue"
     const val Downloads = "downloads"
@@ -168,8 +169,8 @@ fun PodcastNavHost() {
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    val bottomNavRoutes = setOf(Routes.Search, Routes.Queue, Routes.Downloads)
-    val bottomNavTabs = listOf(VibeTab.Search, VibeTab.Queue, VibeTab.Downloads)
+    val bottomNavRoutes = setOf(Routes.Home, Routes.Search, Routes.Queue, Routes.Downloads)
+    val bottomNavTabs = listOf(VibeTab.Home, VibeTab.Search, VibeTab.Queue, VibeTab.Downloads)
 
     Scaffold(
         bottomBar = {
@@ -178,7 +179,7 @@ fun PodcastNavHost() {
                     active = currentRoute ?: "",
                     onNavigate = { tab ->
                         navController.navigate(tab.id) {
-                            popUpTo(Routes.Search) { inclusive = false }
+                            popUpTo(Routes.Home) { inclusive = false }
                             launchSingleTop = true
                         }
                     },
@@ -189,9 +190,38 @@ fun PodcastNavHost() {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Routes.Search,
+            startDestination = Routes.Home,
             modifier = Modifier.padding(innerPadding)
         ) {
+            composable(Routes.Home) {
+                val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+                val continueListening by podcastViewModel.continueListening.collectAsState()
+                val currentEpisode by playerViewModel.currentEpisode.collectAsState()
+                val playerState by playerViewModel.playerState.collectAsState()
+                val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
+
+                HomeScreen(
+                    subscriptions = savedPodcasts,
+                    continueListening = continueListening,
+                    currentEpisode = currentEpisode,
+                    currentArtworkUrl = currentArtworkUrl,
+                    playerState = playerState,
+                    onOpenPodcast = { podcast ->
+                        podcastViewModel.selectPodcast(podcast)
+                        navController.navigate(Routes.episodes(podcast.id))
+                    },
+                    onOpenSearch = { navController.navigate(Routes.Search) },
+                    onPlayEpisode = { episode, artwork ->
+                        playerViewModel.playEpisode(episode, artwork)
+                        navController.navigate(Routes.Player)
+                    },
+                    onPlayPause = { playerViewModel.togglePlayPause() },
+                    onOpenPlayer = { navController.navigate(Routes.Player) },
+                    onSeek = { playerViewModel.seekTo(it) },
+                    onDismissPlayer = { playerViewModel.clearPlayer() },
+                )
+            }
+
             composable(Routes.Search) {
             val scope = androidx.compose.runtime.rememberCoroutineScope()
             val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
@@ -253,7 +283,7 @@ fun PodcastNavHost() {
                 playerViewModel = playerViewModel,
                 onBack = {
                     // Match previous behavior: Episodes back always returns to Search.
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 },
                 onPlayEpisode = { navController.navigate(Routes.Player) },
                 onOpenPlayer = { navController.navigate(Routes.Player) }
@@ -306,7 +336,7 @@ fun PodcastNavHost() {
                 onDismissPlayer = { playerViewModel.clearPlayer() },
                 onBack = {
                     // Match previous behavior: Queue back always returns to Search.
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 }
             )
         }
@@ -326,7 +356,7 @@ fun PodcastNavHost() {
                 onDeleteAll = {
                     scope.launch { podcastViewModel.deleteAllDownloads() }
                 },
-                onBack = { navController.popBackStack(route = Routes.Search, inclusive = false) }
+                onBack = { navController.popBackStack(route = Routes.Home, inclusive = false) }
             )
         }
 
@@ -342,11 +372,11 @@ fun PodcastNavHost() {
             fun goToEpisodesOrSearch() {
                 val podcastId = selectedPodcast?.id
                 if (podcastId == null) {
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 } else {
                     navController.navigate(Routes.episodes(podcastId)) {
-                        // Match previous behavior: Player back always returns to Episodes (and then to Search).
-                        popUpTo(Routes.Search) { inclusive = false }
+                        // Match previous behavior: Player back always returns to Episodes (and then to Home).
+                        popUpTo(Routes.Home) { inclusive = false }
                         launchSingleTop = true
                     }
                 }
@@ -377,7 +407,7 @@ fun PodcastNavHost() {
 
             if (currentEpisode == null) {
                 androidx.compose.runtime.LaunchedEffect(Unit) {
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 }
             }
         }

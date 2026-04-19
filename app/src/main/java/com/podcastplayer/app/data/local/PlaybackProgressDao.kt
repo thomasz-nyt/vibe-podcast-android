@@ -21,6 +21,9 @@ interface PlaybackProgressDao {
     @Query("SELECT * FROM playback_progress WHERE podcastId = :podcastId")
     suspend fun getByPodcastId(podcastId: String): List<PlaybackProgressEntity>
 
+    @Query("SELECT * FROM playback_progress WHERE completed = 0 AND positionMs > 0 ORDER BY lastPlayedAtMs DESC")
+    fun observeInProgress(): Flow<List<PlaybackProgressEntity>>
+
     @Query("DELETE FROM playback_progress WHERE episodeId = :episodeId")
     suspend fun deleteByEpisodeId(episodeId: String)
 }
