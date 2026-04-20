@@ -2,6 +2,8 @@ name: Build debug APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ feature/instant-play ]
   pull_request:
     branches: [ main ]
   push:

@@ -2,6 +2,7 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.OpmlManager
 import com.podcastplayer.app.data.local.PlaybackProgressDao
 import com.podcastplayer.app.data.local.PlaybackProgressEntity
 import com.podcastplayer.app.data.local.QueueStorage
@@ -11,6 +12,8 @@ import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.domain.model.PodcastQueue
+import java.io.InputStream
+import java.io.OutputStream
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -87,8 +90,36 @@ class PodcastViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * In-progress episodes for the Home "Continue listening" shelf. We only have episode
+     * metadata for downloaded episodes (RSS feeds aren't persisted), so this is the
+     * intersection of downloads and in-progress progress entries, most-recent first.
+     */
+    val continueListening: StateFlow<List<ContinueListeningUi>> = combine(
+        downloadedEpisodesUi,
+        playbackProgressDao.observeInProgress()
+    ) { downloads, progress ->
+        val downloadsById = downloads.associateBy { it.episode.id }
+        progress.mapNotNull { entry ->
+            val ui = downloadsById[entry.episodeId] ?: return@mapNotNull null
+            val fraction = if (entry.durationMs > 0L) {
+                (entry.positionMs.toFloat() / entry.durationMs.toFloat()).coerceIn(0f, 1f)
+            } else 0f
+            ContinueListeningUi(
+                episode = ui.episode,
+                podcastTitle = ui.podcastTitle,
+                podcastArtworkUrl = ui.podcastArtworkUrl,
+                progressFraction = fraction,
+                remainingMs = (entry.durationMs - entry.positionMs).coerceAtLeast(0L)
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _playbackProgress = MutableStateFlow<Map<String, PlaybackProgressEntity>>(emptyMap())
     val playbackProgress: StateFlow<Map<String, PlaybackProgressEntity>> = _playbackProgress.asStateFlow()
+
+    private val _opmlResult = MutableStateFlow<OpmlResult?>(null)
+    val opmlResult: StateFlow<OpmlResult?> = _opmlResult.asStateFlow()
 
     private var downloadsJob: Job? = null
     private var savedJob: Job? = null
@@ -280,6 +311,31 @@ class PodcastViewModel(
         return downloadManager.deleteAllDownloads()
     }
 
+    suspend fun exportOpml(outputStream: OutputStream) {
+        withContext(Dispatchers.IO) {
+            OpmlManager.writeOpml(_savedPodcasts.value, outputStream)
+        }.fold(
+            onSuccess = { count -> _opmlResult.value = OpmlResult.ExportSuccess(count) },
+            onFailure = { e -> _opmlResult.value = OpmlResult.Error(e.message ?: "Export failed") }
+        )
+    }
+
+    suspend fun importOpml(inputStream: InputStream) {
+        withContext(Dispatchers.IO) {
+            OpmlManager.readOpml(inputStream)
+        }.fold(
+            onSuccess = { podcasts ->
+                savedPodcastsStorage.saveAll(podcasts)
+                _opmlResult.value = OpmlResult.ImportSuccess(podcasts.size)
+            },
+            onFailure = { e -> _opmlResult.value = OpmlResult.Error(e.message ?: "Import failed") }
+        )
+    }
+
+    fun clearOpmlResult() {
+        _opmlResult.value = null
+    }
+
     /**
      * Build a list containing the latest unplayed episode from each podcast (queue order preserved).
      */
@@ -328,6 +384,14 @@ data class DownloadedEpisodeUi(
     val podcastArtworkUrl: String?
 )
 
+data class ContinueListeningUi(
+    val episode: Episode,
+    val podcastTitle: String?,
+    val podcastArtworkUrl: String?,
+    val progressFraction: Float,
+    val remainingMs: Long,
+)
+
 sealed class PodcastUiState {
     data object Initial : PodcastUiState()
     data object Loading : PodcastUiState()
@@ -340,4 +404,10 @@ sealed class EpisodesUiState {
     data object Loading : EpisodesUiState()
     data class Success(val episodes: List<Episode>) : EpisodesUiState()
     data class Error(val message: String) : EpisodesUiState()
+}
+
+sealed class OpmlResult {
+    data class ExportSuccess(val count: Int) : OpmlResult()
+    data class ImportSuccess(val count: Int) : OpmlResult()
+    data class Error(val message: String) : OpmlResult()
 }

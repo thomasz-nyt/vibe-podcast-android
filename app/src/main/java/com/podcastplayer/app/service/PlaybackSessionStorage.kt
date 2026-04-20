@@ -7,7 +7,7 @@ import androidx.media3.common.MediaMetadata
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal data class StoredPlaybackSession(
+data class StoredPlaybackSession(
     val items: List<MediaItem>,
     val currentIndex: Int,
     val currentPositionMs: Long,
@@ -16,7 +16,7 @@ internal data class StoredPlaybackSession(
     val isCompleted: Boolean
 )
 
-internal class PlaybackSessionStorage(context: Context) {
+class PlaybackSessionStorage(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -91,6 +91,10 @@ internal class PlaybackSessionStorage(context: Context) {
                 isCompleted = json.optBoolean("isCompleted", false)
             )
         }.getOrNull()
+    }
+
+    fun clear() {
+        prefs.edit().remove(KEY_SESSION).apply()
     }
 
     companion object {

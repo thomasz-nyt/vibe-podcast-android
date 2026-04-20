@@ -1,35 +1,41 @@
 package com.podcastplayer.app.presentation.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.text.HtmlCompat
+import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.domain.model.PlaybackState
+import com.podcastplayer.app.ui.theme.JetBrainsMono
 
+/**
+ * Vibe mini player — floating pill. Sits above bottom nav with breathing room.
+ * Tap opens full player; play button toggles playback; close dismisses.
+ */
 @Composable
 fun MiniPlayerBar(
     episode: Episode,
@@ -37,111 +43,124 @@ fun MiniPlayerBar(
     playerState: PlayerState,
     onPlayPause: () -> Unit,
     onOpenPlayer: () -> Unit,
-    onSeek: (Long) -> Unit,
+    @Suppress("UNUSED_PARAMETER") onSeek: (Long) -> Unit,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var sliderValue by remember(playerState.currentPosition, playerState.duration) {
-        mutableStateOf(playerState.currentPosition.coerceAtLeast(0L).toFloat())
-    }
-    val duration = playerState.duration.coerceAtLeast(0L)
-    val description = remember(episode.description) { episode.description.stripHtml() }
+    val colors = MaterialTheme.colorScheme
+    val duration = playerState.duration.coerceAtLeast(1L)
+    val position = playerState.currentPosition.coerceIn(0L, duration)
+    val progress = position.toFloat() / duration.toFloat()
+    val isPlaying = playerState.state == PlaybackState.PLAYING
 
-    Card(
+    Surface(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = 10.dp)
+            .heightIn(min = 62.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, colors.outline, RoundedCornerShape(14.dp))
             .clickable(onClick = onOpenPlayer),
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        color = colors.surfaceVariant,
+        tonalElevation = 8.dp,
+        shadowElevation = 12.dp,
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-        ) {
+        Box {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, top = 8.dp, end = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 AsyncImage(
-                    // Only ever pass image URLs to Coil. Never pass audio URLs or local audio file paths.
                     model = episode.imageUrl ?: artworkUrl,
                     contentDescription = episode.title,
                     placeholder = painterResource(R.drawable.ic_artwork_placeholder),
                     error = painterResource(R.drawable.ic_artwork_placeholder),
                     fallback = painterResource(R.drawable.ic_artwork_placeholder),
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(RoundedCornerShape(8.dp)),
                 )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = episode.title,
-                        style = MaterialTheme.typography.titleSmall,
+                        color = colors.onSurface,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        letterSpacing = (-0.1).sp,
                     )
-                    if (description.isNotBlank()) {
+                    Spacer(Modifier.height(3.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = description,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            text = formatMiniTime(position),
+                            color = colors.primary,
+                            fontSize = 11.sp,
+                            fontFamily = JetBrainsMono,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "/ ${formatMiniTime(duration)}",
+                            color = colors.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            fontFamily = JetBrainsMono,
                         )
                     }
                 }
                 IconButton(
-                    onClick = onPlayPause,
-                    modifier = Modifier.size(48.dp)
+                    onClick = onDismiss,
+                    modifier = Modifier.size(28.dp),
                 ) {
                     Icon(
-                        imageVector = if (playerState.state == PlaybackState.PLAYING) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playerState.state == PlaybackState.PLAYING) "Pause" else "Play",
-                        modifier = Modifier.size(28.dp)
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss player",
+                        tint = colors.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
+                        .background(colors.primary)
+                        .clickable { onPlayPause() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = colors.onPrimary,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Slider(
-                value = sliderValue,
-                onValueChange = { sliderValue = it },
-                valueRange = 0f..duration.coerceAtLeast(1L).toFloat(),
-                onValueChangeFinished = { onSeek(sliderValue.toLong()) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+            // Thin progress line at bottom of pill
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(colors.outlineVariant),
             ) {
-                Text(
-                    text = formatTime(sliderValue.toLong()),
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    text = formatTime(duration),
-                    style = MaterialTheme.typography.bodySmall
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(progress.coerceIn(0f, 1f))
+                        .background(colors.primary),
                 )
             }
         }
     }
 }
 
-private fun formatTime(ms: Long): String {
-    val totalSeconds = ms / 1000
-    val hours = totalSeconds / 3600
-    val minutes = (totalSeconds % 3600) / 60
-    val seconds = totalSeconds % 60
-
-    return if (hours > 0) {
-        String.format("%d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format("%d:%02d", minutes, seconds)
-    }
-}
-
-private fun String?.stripHtml(): String {
-    if (this.isNullOrBlank()) return ""
-    return HtmlCompat.fromHtml(this, HtmlCompat.FROM_HTML_MODE_LEGACY).toString().trim()
+private fun formatMiniTime(ms: Long): String {
+    val s = (ms / 1000).coerceAtLeast(0)
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }

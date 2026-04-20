@@ -2,15 +2,22 @@ package com.podcastplayer.app.presentation.ui
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.podcastplayer.app.data.local.DatabaseProvider
@@ -24,10 +31,15 @@ import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PlayerViewModel
 import com.podcastplayer.app.presentation.viewmodel.PodcastViewModel
+import com.podcastplayer.app.domain.model.PlaybackState
+import com.podcastplayer.app.service.PlaybackSessionStorage
 import com.podcastplayer.app.service.PlayerController
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private object Routes {
+    const val Home = "home"
     const val Search = "search"
     const val Queue = "queue"
     const val Downloads = "downloads"
@@ -45,6 +57,7 @@ private object Routes {
 fun PodcastNavHost() {
     val context = LocalContext.current
     val db = remember { DatabaseProvider.getDatabase(context) }
+    val queueStorage = remember { QueueStorage(context) }
 
     // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
     val podcastViewModel: PodcastViewModel = viewModel(
@@ -52,23 +65,164 @@ fun PodcastNavHost() {
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
             SavedPodcastsStorage(context),
-            QueueStorage(context),
+            queueStorage,
             db.playbackProgressDao()
         )
     )
     val playerViewModel: PlayerViewModel = viewModel(
         factory = PlayerViewModelFactory(
-            PlayerController.getInstance(context)
+            PlayerController.getInstance(context),
+            PlaybackSessionStorage(context)
         )
     )
 
     val navController = rememberNavController()
+    val contentResolver = context.contentResolver
+    val opmlScope = rememberCoroutineScope()
 
-    NavHost(
-        navController = navController,
-        startDestination = Routes.Search
-    ) {
-        composable(Routes.Search) {
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/x-opml")
+    ) { uri ->
+        uri?.let {
+            opmlScope.launch {
+                contentResolver.openOutputStream(it)?.use { os ->
+                    podcastViewModel.exportOpml(os)
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            opmlScope.launch {
+                contentResolver.openInputStream(it)?.use { inputStream ->
+                    podcastViewModel.importOpml(inputStream)
+                }
+            }
+        }
+    }
+
+    // Auto-play Morning queue when app is opened before 8:30 AM
+    LaunchedEffect(Unit) {
+        val now = java.time.LocalTime.now()
+        if (now >= java.time.LocalTime.of(8, 30)) return@LaunchedEffect
+
+        // Wait for session restore in PlayerViewModel.init to complete
+        delay(2000)
+
+        // Don't override an existing/restored session
+        if (playerViewModel.currentEpisode.value != null) return@LaunchedEffect
+
+        // Find "Morning" queue and resolve its podcasts
+        val morningPayload = queueStorage.queues.value
+            .firstOrNull { it.name.equals("Morning", ignoreCase = true) }
+            ?: return@LaunchedEffect
+
+        val savedMap = podcastViewModel.savedPodcasts.value.associateBy { it.id }
+        val podcasts = morningPayload.podcastIds.mapNotNull { savedMap[it] }
+        if (podcasts.isEmpty()) return@LaunchedEffect
+
+        // Build unplayed episodes and start playback
+        val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
+        if (episodes.isNotEmpty()) {
+            playerViewModel.playEpisodesQueue(
+                episodes = episodes,
+                defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
+            )
+            navController.navigate(Routes.Player)
+        }
+    }
+
+    // Auto-play Morning queue when app is opened before 8:30 AM
+    LaunchedEffect(Unit) {
+        val now = java.time.LocalTime.now()
+        if (now >= java.time.LocalTime.of(8, 30)) return@LaunchedEffect
+
+        // Wait for session restore in PlayerViewModel.init to complete
+        delay(2000)
+
+        // Only skip auto-play if something is actively playing/loading (not paused/restored)
+        val playbackState = playerViewModel.playerState.value.state
+        if (playbackState == PlaybackState.PLAYING || playbackState == PlaybackState.LOADING) return@LaunchedEffect
+
+        // Find "Morning" queue and resolve its podcasts
+        val morningPayload = queueStorage.queues.value
+            .firstOrNull { it.name.equals("Morning", ignoreCase = true) }
+            ?: return@LaunchedEffect
+
+        val savedMap = podcastViewModel.savedPodcasts.value.associateBy { it.id }
+        val podcasts = morningPayload.podcastIds.mapNotNull { savedMap[it] }
+        if (podcasts.isEmpty()) return@LaunchedEffect
+
+        // Build unplayed episodes and start playback
+        val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
+        if (episodes.isNotEmpty()) {
+            playerViewModel.playEpisodesQueue(
+                episodes = episodes,
+                defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
+            )
+            navController.navigate(Routes.Player)
+        }
+    }
+
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    val bottomNavRoutes = setOf(Routes.Home, Routes.Search, Routes.Queue, Routes.Downloads)
+    val bottomNavTabs = listOf(VibeTab.Home, VibeTab.Search, VibeTab.Queue, VibeTab.Downloads)
+
+    Scaffold(
+        bottomBar = {
+            if (currentRoute in bottomNavRoutes) {
+                VibeBottomNav(
+                    active = currentRoute ?: "",
+                    onNavigate = { tab ->
+                        navController.navigate(tab.id) {
+                            popUpTo(Routes.Home) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    },
+                    tabs = bottomNavTabs,
+                )
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = Routes.Home,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(Routes.Home) {
+                val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+                val continueListening by podcastViewModel.continueListening.collectAsState()
+                val currentEpisode by playerViewModel.currentEpisode.collectAsState()
+                val playerState by playerViewModel.playerState.collectAsState()
+                val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
+
+                HomeScreen(
+                    subscriptions = savedPodcasts,
+                    continueListening = continueListening,
+                    currentEpisode = currentEpisode,
+                    currentArtworkUrl = currentArtworkUrl,
+                    playerState = playerState,
+                    onOpenPodcast = { podcast ->
+                        podcastViewModel.selectPodcast(podcast)
+                        navController.navigate(Routes.episodes(podcast.id))
+                    },
+                    onOpenSearch = { navController.navigate(Routes.Search) },
+                    onPlayEpisode = { episode, artwork ->
+                        playerViewModel.playEpisode(episode, artwork)
+                        navController.navigate(Routes.Player)
+                    },
+                    onPlayPause = { playerViewModel.togglePlayPause() },
+                    onOpenPlayer = { navController.navigate(Routes.Player) },
+                    onSeek = { playerViewModel.seekTo(it) },
+                    onDismissPlayer = { playerViewModel.clearPlayer() },
+                )
+            }
+
+            composable(Routes.Search) {
             val scope = androidx.compose.runtime.rememberCoroutineScope()
             val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
 
@@ -96,6 +250,10 @@ fun PodcastNavHost() {
                             }
                         }
                     }
+                },
+                onExportOpml = { exportLauncher.launch("vibe-podcasts.opml") },
+                onImportOpml = {
+                    importLauncher.launch(arrayOf("text/x-opml", "text/xml", "application/xml", "*/*"))
                 }
             )
         }
@@ -125,7 +283,7 @@ fun PodcastNavHost() {
                 playerViewModel = playerViewModel,
                 onBack = {
                     // Match previous behavior: Episodes back always returns to Search.
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 },
                 onPlayEpisode = { navController.navigate(Routes.Player) },
                 onOpenPlayer = { navController.navigate(Routes.Player) }
@@ -175,9 +333,10 @@ fun PodcastNavHost() {
                         }
                     }
                 },
+                onDismissPlayer = { playerViewModel.clearPlayer() },
                 onBack = {
                     // Match previous behavior: Queue back always returns to Search.
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 }
             )
         }
@@ -197,7 +356,7 @@ fun PodcastNavHost() {
                 onDeleteAll = {
                     scope.launch { podcastViewModel.deleteAllDownloads() }
                 },
-                onBack = { navController.popBackStack(route = Routes.Search, inclusive = false) }
+                onBack = { navController.popBackStack(route = Routes.Home, inclusive = false) }
             )
         }
 
@@ -213,11 +372,11 @@ fun PodcastNavHost() {
             fun goToEpisodesOrSearch() {
                 val podcastId = selectedPodcast?.id
                 if (podcastId == null) {
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 } else {
                     navController.navigate(Routes.episodes(podcastId)) {
-                        // Match previous behavior: Player back always returns to Episodes (and then to Search).
-                        popUpTo(Routes.Search) { inclusive = false }
+                        // Match previous behavior: Player back always returns to Episodes (and then to Home).
+                        popUpTo(Routes.Home) { inclusive = false }
                         launchSingleTop = true
                     }
                 }
@@ -248,9 +407,10 @@ fun PodcastNavHost() {
 
             if (currentEpisode == null) {
                 androidx.compose.runtime.LaunchedEffect(Unit) {
-                    navController.popBackStack(route = Routes.Search, inclusive = false)
+                    navController.popBackStack(route = Routes.Home, inclusive = false)
                 }
             }
+        }
         }
     }
 }

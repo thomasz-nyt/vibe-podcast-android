@@ -7,6 +7,7 @@ import androidx.media3.common.Player
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
+import com.podcastplayer.app.service.PlaybackSessionStorage
 import com.podcastplayer.app.service.PlayerController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -16,7 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class PlayerViewModel(
-    private val playerController: PlayerController
+    private val playerController: PlayerController,
+    private val playbackSessionStorage: PlaybackSessionStorage
 ) : ViewModel() {
 
     private val _playerState = MutableStateFlow(PlayerState())
@@ -220,6 +222,19 @@ class PlayerViewModel(
         _currentEpisode.value = episode
         _currentArtworkUrl.value = episode.imageUrl ?: artworkUrl
         _playerState.value = _playerState.value.copy(currentEpisode = episode)
+    }
+
+    fun clearPlayer() {
+        viewModelScope.launch {
+            playerController.stop()
+            playbackSessionStorage.clear()
+            _currentEpisode.value = null
+            _currentArtworkUrl.value = null
+            queueEpisodes = emptyMap()
+            _playerState.value = PlayerState(PlaybackState.IDLE, null, 0L, 0L, 1f)
+            _hasPrevious.value = false
+            _hasNext.value = false
+        }
     }
 
     override fun onCleared() {
