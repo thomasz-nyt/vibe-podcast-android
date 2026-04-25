@@ -83,6 +83,7 @@ class DownloadManager(private val context: Context) {
     private fun openWithRedirects(initialUrl: String): HttpURLConnection {
         var url = URL(initialUrl)
         var redirects = 0
+        val visited = mutableListOf(url.toString())
         while (true) {
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = false
@@ -95,15 +96,25 @@ class DownloadManager(private val context: Context) {
             if (code in 300..399) {
                 val location = conn.getHeaderField("Location")
                 conn.disconnect()
-                if (location.isNullOrBlank() || ++redirects > MAX_REDIRECTS) {
-                    throw IOException("Too many redirects or missing Location header")
+                if (location.isNullOrBlank()) {
+                    throw IOException("HTTP $code without Location header from $url")
                 }
-                url = URL(url, location)
+                if (++redirects > MAX_REDIRECTS) {
+                    throw IOException(
+                        "Exceeded $MAX_REDIRECTS redirects. Chain: ${visited.joinToString(" -> ")}"
+                    )
+                }
+                url = try {
+                    URL(url, location)
+                } catch (e: Exception) {
+                    throw IOException("Invalid redirect target '$location' from $url", e)
+                }
+                visited += url.toString()
                 continue
             }
             if (code !in 200..299) {
                 conn.disconnect()
-                throw IOException("HTTP $code for ${url}")
+                throw IOException("HTTP $code from $url")
             }
             return conn
         }
@@ -200,9 +211,10 @@ class DownloadManager(private val context: Context) {
     }
 
     companion object {
-        private const val MAX_REDIRECTS = 5
+        private const val MAX_REDIRECTS = 20
         private const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android) BunPod/1.0 (Podcast Player)"
+            "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
     }
 
     private fun DownloadedEpisodeEntity.toDomain(): Episode {
