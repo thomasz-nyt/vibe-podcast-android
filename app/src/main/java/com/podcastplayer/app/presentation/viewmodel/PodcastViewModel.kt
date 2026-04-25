@@ -52,6 +52,9 @@ class PodcastViewModel(
     private val _downloadProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
     val downloadProgress: StateFlow<Map<String, Float>> = _downloadProgress.asStateFlow()
 
+    private val _downloadError = MutableStateFlow<String?>(null)
+    val downloadError: StateFlow<String?> = _downloadError.asStateFlow()
+
     private val _savedPodcasts = MutableStateFlow<List<Podcast>>(emptyList())
     val savedPodcasts: StateFlow<List<Podcast>> = _savedPodcasts.asStateFlow()
 
@@ -240,8 +243,16 @@ class PodcastViewModel(
             _downloadProgress.value = _downloadProgress.value - episode.id
             if (result.isSuccess) {
                 refreshEpisodesWithDownloads()
+            } else {
+                val reason = result.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
+                    ?: "Unknown error"
+                _downloadError.value = "Download failed: $reason"
             }
         }
+    }
+
+    fun clearDownloadError() {
+        _downloadError.value = null
     }
 
     suspend fun deleteDownload(episodeId: String): Result<Unit> {
