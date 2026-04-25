@@ -27,8 +27,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +72,14 @@ fun EpisodeListScreen(
     val episodesState by podcastViewModel.episodesUiState.collectAsState()
     val downloadedEpisodes by podcastViewModel.downloadedEpisodes.collectAsState()
     val downloadProgress by podcastViewModel.downloadProgress.collectAsState()
+    val downloadError by podcastViewModel.downloadError.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(downloadError) {
+        downloadError?.let {
+            snackbarHostState.showSnackbar(it)
+            podcastViewModel.clearDownloadError()
+        }
+    }
     val playbackProgressMap by podcastViewModel.playbackProgress.collectAsState()
     val downloadedIds = remember(downloadedEpisodes) { downloadedEpisodes.map { it.id }.toSet() }
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
@@ -76,7 +87,10 @@ fun EpisodeListScreen(
     val playerState by playerViewModel.playerState.collectAsState()
     val scope = rememberCoroutineScope()
 
-    Scaffold(containerColor = colors.background) { padding ->
+    Scaffold(
+        containerColor = colors.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()

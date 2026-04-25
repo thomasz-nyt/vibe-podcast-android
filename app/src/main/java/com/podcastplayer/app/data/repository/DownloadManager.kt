@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Date
@@ -41,22 +43,29 @@ class DownloadManager(private val context: Context) {
                 return@withContext Result.success(localFile.absolutePath)
             }
 
-            val connection = URL(episode.audioUrl).openConnection()
+            val connection = openWithRedirects(episode.audioUrl)
             val totalBytes = connection.contentLengthLong
 
-            connection.getInputStream().use { input ->
-                FileOutputStream(localFile).use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var bytesRead: Int
-                    var downloaded = 0L
-                    while (input.read(buffer).also { bytesRead = it } >= 0) {
-                        output.write(buffer, 0, bytesRead)
-                        downloaded += bytesRead
-                        if (totalBytes > 0) {
-                            onProgress(downloaded.toFloat() / totalBytes.toFloat())
+            try {
+                connection.inputStream.use { input ->
+                    FileOutputStream(localFile).use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var bytesRead: Int
+                        var downloaded = 0L
+                        while (input.read(buffer).also { bytesRead = it } >= 0) {
+                            output.write(buffer, 0, bytesRead)
+                            downloaded += bytesRead
+                            if (totalBytes > 0) {
+                                onProgress(downloaded.toFloat() / totalBytes.toFloat())
+                            }
                         }
                     }
                 }
+            } catch (e: Exception) {
+                if (localFile.exists()) localFile.delete()
+                throw e
+            } finally {
+                connection.disconnect()
             }
 
             if (totalBytes > 0) {
@@ -68,6 +77,46 @@ class DownloadManager(private val context: Context) {
             Result.success(localFile.absolutePath)
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private fun openWithRedirects(initialUrl: String): HttpURLConnection {
+        var url = URL(initialUrl)
+        var redirects = 0
+        val visited = mutableListOf(url.toString())
+        while (true) {
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 30_000
+                readTimeout = 30_000
+                setRequestProperty("User-Agent", USER_AGENT)
+                setRequestProperty("Accept", "*/*")
+            }
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (location.isNullOrBlank()) {
+                    throw IOException("HTTP $code without Location header from $url")
+                }
+                if (++redirects > MAX_REDIRECTS) {
+                    throw IOException(
+                        "Exceeded $MAX_REDIRECTS redirects. Chain: ${visited.joinToString(" -> ")}"
+                    )
+                }
+                url = try {
+                    URL(url, location)
+                } catch (e: Exception) {
+                    throw IOException("Invalid redirect target '$location' from $url", e)
+                }
+                visited += url.toString()
+                continue
+            }
+            if (code !in 200..299) {
+                conn.disconnect()
+                throw IOException("HTTP $code from $url")
+            }
+            return conn
         }
     }
 
@@ -159,6 +208,13 @@ class DownloadManager(private val context: Context) {
             fileSize = File(localPath).length(),
             downloadDate = System.currentTimeMillis()
         )
+    }
+
+    companion object {
+        private const val MAX_REDIRECTS = 20
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Pixel) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
     }
 
     private fun DownloadedEpisodeEntity.toDomain(): Episode {
