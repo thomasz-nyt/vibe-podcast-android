@@ -51,6 +51,7 @@ import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
+import com.podcastplayer.app.domain.model.MediaType
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
@@ -161,14 +162,20 @@ fun PlayerScreen(
                     .clip(RoundedCornerShape(20.dp))
                     .border(1.dp, colors.outline, RoundedCornerShape(20.dp)),
             ) {
-                AsyncImage(
-                    model = episode.imageUrl ?: artworkUrl,
-                    contentDescription = episode.title,
-                    placeholder = painterResource(R.drawable.ic_artwork_placeholder),
-                    error = painterResource(R.drawable.ic_artwork_placeholder),
-                    fallback = painterResource(R.drawable.ic_artwork_placeholder),
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (episode.mediaType == MediaType.VIDEO) {
+                    // URL-downloaded videos render the actual frames here while the
+                    // existing transport bar below still drives playback (issue #33).
+                    VideoSurface(modifier = Modifier.fillMaxSize(), cornerRadius = 20.dp)
+                } else {
+                    AsyncImage(
+                        model = episode.imageUrl ?: artworkUrl,
+                        contentDescription = episode.title,
+                        placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                        error = painterResource(R.drawable.ic_artwork_placeholder),
+                        fallback = painterResource(R.drawable.ic_artwork_placeholder),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
@@ -453,7 +460,7 @@ private fun SleepOption(minutes: Long, onClick: () -> Unit) {
     }
 }
 
-// ─── Landscape player layout ───────────────────────────────────
+// ─── Landscape player layout ──────────────────────────────────────────────────
 // Left 300dp: close button + 240dp artwork.
 // Right: title block, scrubber, transport row, speed/sleep chips.
 @Composable
@@ -517,14 +524,18 @@ private fun PlayerLandscape(
                     .clip(RoundedCornerShape(18.dp))
                     .border(1.dp, colors.outline, RoundedCornerShape(18.dp)),
             ) {
-                AsyncImage(
-                    model = episode.imageUrl ?: artworkUrl,
-                    contentDescription = episode.title,
-                    placeholder = painterResource(R.drawable.ic_artwork_placeholder),
-                    error = painterResource(R.drawable.ic_artwork_placeholder),
-                    fallback = painterResource(R.drawable.ic_artwork_placeholder),
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (episode.mediaType == MediaType.VIDEO) {
+                    VideoSurface(modifier = Modifier.fillMaxSize(), cornerRadius = 18.dp)
+                } else {
+                    AsyncImage(
+                        model = episode.imageUrl ?: artworkUrl,
+                        contentDescription = episode.title,
+                        placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                        error = painterResource(R.drawable.ic_artwork_placeholder),
+                        fallback = painterResource(R.drawable.ic_artwork_placeholder),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
