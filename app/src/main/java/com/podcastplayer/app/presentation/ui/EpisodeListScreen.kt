@@ -1,6 +1,7 @@
 package com.podcastplayer.app.presentation.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,8 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
@@ -64,6 +70,7 @@ fun EpisodeListScreen(
     onBack: () -> Unit,
     onPlayEpisode: () -> Unit = {},
     onOpenPlayer: () -> Unit,
+    isLandscape: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
     val episodesState by podcastViewModel.episodesUiState.collectAsState()
@@ -75,6 +82,25 @@ fun EpisodeListScreen(
     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
     val scope = rememberCoroutineScope()
+
+    if (isLandscape) {
+        EpisodeListLandscape(
+            podcast = podcast,
+            episodesState = episodesState as? EpisodesUiState.Success,
+            downloadedIds = downloadedIds,
+            downloadProgress = downloadProgress,
+            playbackProgressMap = playbackProgressMap,
+            onBack = onBack,
+            onPlayEpisode = { episode ->
+                playerViewModel.playEpisode(episode, podcast?.artworkUrl)
+                onPlayEpisode()
+            },
+            onDownload = { podcastViewModel.startDownload(it) },
+            onDelete = { id -> scope.launch { podcastViewModel.deleteDownload(id) } },
+            podcastViewModel = podcastViewModel,
+        )
+        return
+    }
 
     Scaffold(containerColor = colors.background) { padding ->
         Box(
@@ -206,6 +232,346 @@ fun EpisodeListScreen(
             }
         }
     }
+}
+
+// ─── Landscape two-column layout ──────────────────────────────
+// Left: sticky 280dp meta column. Right: scrollable episode list.
+@Composable
+private fun EpisodeListLandscape(
+    podcast: Podcast?,
+    episodesState: EpisodesUiState.Success?,
+    downloadedIds: Set<String>,
+    downloadProgress: Map<String, Float>,
+    playbackProgressMap: Map<String, com.podcastplayer.app.data.local.PlaybackProgressEntity>,
+    onBack: () -> Unit,
+    onPlayEpisode: (Episode) -> Unit,
+    onDownload: (Episode) -> Unit,
+    onDelete: (String) -> Unit,
+    podcastViewModel: PodcastViewModel,
+) {
+    val colors = MaterialTheme.colorScheme
+    var subscribed by remember { mutableStateOf(podcastViewModel.savedPodcasts.value.any { it.id == podcast?.id }) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background),
+    ) {
+        // LEFT — sticky meta column
+        Column(
+            modifier = Modifier
+                .width(280.dp)
+                .fillMaxHeight()
+                .border(width = 1.dp, color = colors.outlineVariant, shape = RoundedCornerShape(0.dp))
+                .verticalScroll(rememberScrollState())
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = onBack),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "Back",
+                        tint = colors.onSurface,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+
+            // Podcast artwork
+            AsyncImage(
+                model = podcast?.artworkUrl,
+                contentDescription = podcast?.title,
+                placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                error = painterResource(R.drawable.ic_artwork_placeholder),
+                fallback = painterResource(R.drawable.ic_artwork_placeholder),
+                modifier = Modifier
+                    .size(180.dp)
+                    .clip(RoundedCornerShape(14.dp)),
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                podcast?.artist?.let { artist ->
+                    Text(
+                        text = artist.uppercase(),
+                        fontFamily = JetBrainsMono,
+                        fontSize = 9.5.sp,
+                        letterSpacing = 1.6.sp,
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = podcast?.title ?: "",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onSurface,
+                    letterSpacing = (-0.3).sp,
+                    lineHeight = 21.sp,
+                )
+            }
+
+            // Subscribe toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(
+                            width = 1.dp,
+                            color = if (subscribed) colors.outline else androidx.compose.ui.graphics.Color.Transparent,
+                            shape = RoundedCornerShape(10.dp),
+                        )
+                        .background(if (subscribed) androidx.compose.ui.graphics.Color.Transparent else colors.primary)
+                        .clickable {
+                            if (subscribed) podcastViewModel.removeSavedPodcast(podcast?.id ?: "")
+                            else podcast?.let { podcastViewModel.savePodcast(it) }
+                            subscribed = !subscribed
+                        }
+                        .padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (subscribed) "Subscribed" else "Subscribe",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (subscribed) colors.onSurface else colors.onPrimary,
+                    )
+                }
+            }
+        }
+
+        // RIGHT — scrollable episode list
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            contentPadding = PaddingValues(bottom = 24.dp),
+        ) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 22.dp, end = 110.dp, top = 32.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "Episodes",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.onSurface,
+                            letterSpacing = (-0.2).sp,
+                        )
+                        episodesState?.let { state ->
+                            Text(
+                                text = state.episodes.size.toString().padStart(2, '0'),
+                                fontFamily = JetBrainsMono,
+                                fontSize = 11.sp,
+                                color = colors.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+
+            episodesState?.let { state ->
+                items(state.episodes, key = { it.id }) { episode ->
+                    val isDownloaded = downloadedIds.contains(episode.id) || episode.isDownloaded
+                    val progress = downloadProgress[episode.id]
+                    val playback = playbackProgressMap[episode.id]
+                    val isCompleted = playback?.completed == true
+                    val playbackProgress = playback?.let { pb ->
+                        val dur = pb.durationMs
+                        if (dur <= 0L) null else (pb.positionMs.toFloat() / dur.toFloat())
+                    }
+
+                    EpisodeLandscapeRow(
+                        episode = episode,
+                        artworkUrl = podcast?.artworkUrl,
+                        isDownloaded = isDownloaded,
+                        downloadProgress = progress,
+                        isCompleted = isCompleted,
+                        playbackProgress = playbackProgress,
+                        onClick = { onPlayEpisode(episode) },
+                        onDownload = { onDownload(episode) },
+                        onDelete = { onDelete(episode.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpisodeLandscapeRow(
+    episode: Episode,
+    artworkUrl: String?,
+    isDownloaded: Boolean,
+    downloadProgress: Float?,
+    isCompleted: Boolean,
+    playbackProgress: Float?,
+    onClick: () -> Unit,
+    onDownload: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(width = 0.dp, color = colors.outlineVariant, shape = RoundedCornerShape(0.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Small play button
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .border(1.5.dp, colors.outline, CircleShape)
+                    .clickable(onClick = onClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PlayArrow,
+                    contentDescription = "Play",
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(13.dp),
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                // Metadata row
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = buildMetadataLabel(episode),
+                        fontFamily = JetBrainsMono,
+                        fontSize = 9.5.sp,
+                        letterSpacing = 0.8.sp,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                    if (isDownloaded) {
+                        Text(
+                            text = "· SAVED",
+                            fontFamily = JetBrainsMono,
+                            fontSize = 9.5.sp,
+                            color = colors.primary,
+                        )
+                    }
+                    if (isCompleted) {
+                        Text(
+                            text = "· PLAYED",
+                            fontFamily = JetBrainsMono,
+                            fontSize = 9.5.sp,
+                            color = colors.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = episode.title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isCompleted) colors.onSurfaceVariant else colors.onSurface,
+                    letterSpacing = (-0.1).sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                episode.description?.let { desc ->
+                    val clean = remember(desc) { desc.stripHtml() }
+                    if (clean.isNotBlank()) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = clean,
+                            fontSize = 12.sp,
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (playbackProgress != null && playbackProgress > 0.01f && !isCompleted) {
+                    Spacer(Modifier.height(5.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        LinearProgressIndicator(
+                            progress = playbackProgress.coerceIn(0f, 1f),
+                            color = colors.primary,
+                            trackColor = colors.outlineVariant,
+                            modifier = Modifier
+                                .width(180.dp)
+                                .height(2.dp)
+                                .clip(RoundedCornerShape(999.dp)),
+                        )
+                    }
+                }
+            }
+
+            // Download icon button
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { if (isDownloaded) onDelete() else onDownload() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (isDownloaded) Icons.Outlined.DownloadDone else Icons.Outlined.Download,
+                    contentDescription = if (isDownloaded) "Remove download" else "Download",
+                    tint = if (isDownloaded) colors.primary else colors.onSurfaceVariant,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+        }
+
+        if (downloadProgress != null && !isDownloaded) {
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = downloadProgress.coerceIn(0f, 1f),
+                color = colors.primary,
+                trackColor = colors.outlineVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .clip(RoundedCornerShape(999.dp)),
+            )
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(colors.outlineVariant),
+    )
 }
 
 @Composable

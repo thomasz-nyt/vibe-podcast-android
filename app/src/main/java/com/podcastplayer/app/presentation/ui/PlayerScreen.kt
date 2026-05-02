@@ -70,6 +70,7 @@ fun PlayerScreen(
     onSetSleepTimer: (Long) -> Unit,
     onCancelSleepTimer: () -> Unit,
     onDismiss: () -> Unit,
+    isLandscape: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
     val description = remember(episode.description) { episode.description.stripHtml() }
@@ -78,6 +79,29 @@ fun PlayerScreen(
     val position = playerState.currentPosition.coerceIn(0L, duration)
 
     var sleepSheetOpen by remember { mutableStateOf(false) }
+
+    if (isLandscape) {
+        PlayerLandscape(
+            episode = episode,
+            artworkUrl = artworkUrl,
+            isPlaying = isPlaying,
+            position = position,
+            duration = duration,
+            playbackSpeed = playerState.playbackSpeed,
+            sleepTimerRemaining = sleepTimerRemaining,
+            hasPrevious = hasPrevious,
+            hasNext = hasNext,
+            onPlayPause = onPlayPause,
+            onPlayPrevious = onPlayPrevious,
+            onPlayNext = onPlayNext,
+            onSeek = onSeek,
+            onSpeedChange = onSpeedChange,
+            onSetSleepTimer = onSetSleepTimer,
+            onCancelSleepTimer = onCancelSleepTimer,
+            onDismiss = onDismiss,
+        )
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -424,6 +448,238 @@ private fun SleepOption(minutes: Long, onClick: () -> Unit) {
             fontFamily = JetBrainsMono,
             fontWeight = FontWeight.Medium,
             color = colors.onSurface,
+        )
+    }
+}
+
+// ─── Landscape player layout ───────────────────────────────────
+// Left 300dp: close button + 240dp artwork.
+// Right: title block, scrubber, transport row, speed/sleep chips.
+@Composable
+private fun PlayerLandscape(
+    episode: Episode,
+    artworkUrl: String?,
+    isPlaying: Boolean,
+    position: Long,
+    duration: Long,
+    playbackSpeed: Float,
+    sleepTimerRemaining: Long?,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+    onPlayPause: () -> Unit,
+    onPlayPrevious: () -> Unit,
+    onPlayNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onSpeedChange: (Float) -> Unit,
+    onSetSleepTimer: (Long) -> Unit,
+    onCancelSleepTimer: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val progress = position.toFloat() / duration.toFloat()
+    var sleepSheetOpen by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(colors.background)
+            .padding(start = 24.dp, top = 32.dp, end = 110.dp, bottom = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        // LEFT — close button + artwork
+        Column(
+            modifier = Modifier
+                .width(300.dp)
+                .fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Start)
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = "Close player",
+                    tint = colors.onSurface,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .size(240.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .border(1.dp, colors.outline, RoundedCornerShape(18.dp)),
+            ) {
+                AsyncImage(
+                    model = episode.imageUrl ?: artworkUrl,
+                    contentDescription = episode.title,
+                    placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                    error = painterResource(R.drawable.ic_artwork_placeholder),
+                    fallback = painterResource(R.drawable.ic_artwork_placeholder),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+
+        // RIGHT — metadata + scrubber + transport + chips
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            // Title block
+            Text(
+                text = episode.title,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.onSurface,
+                letterSpacing = (-0.4).sp,
+                lineHeight = 26.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = episode.podcastId,
+                fontSize = 13.sp,
+                color = colors.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(22.dp))
+
+            // Scrubber
+            Slider(
+                value = position.toFloat(),
+                valueRange = 0f..duration.toFloat(),
+                onValueChange = { onSeek(it.toLong()) },
+                colors = SliderDefaults.colors(
+                    thumbColor = colors.primary,
+                    activeTrackColor = colors.primary,
+                    inactiveTrackColor = colors.outlineVariant,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = formatPlayerTime(position),
+                    fontSize = 11.sp,
+                    fontFamily = JetBrainsMono,
+                    color = colors.primary,
+                )
+                Text(
+                    text = "-${formatPlayerTime(duration - position)}",
+                    fontSize = 11.sp,
+                    fontFamily = JetBrainsMono,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Transport + chips in one row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start,
+            ) {
+                TransportButton(
+                    icon = Icons.Rounded.SkipPrevious,
+                    description = "Previous episode",
+                    enabled = hasPrevious,
+                    size = 38.dp,
+                    iconSize = 20.dp,
+                    onClick = onPlayPrevious,
+                )
+                Spacer(Modifier.width(2.dp))
+                TransportButton(
+                    icon = Icons.Rounded.FastRewind,
+                    description = "Rewind 15s",
+                    size = 44.dp,
+                    iconSize = 22.dp,
+                    onClick = { onSeek((position - 15_000L).coerceAtLeast(0L)) },
+                )
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .size(60.dp)
+                        .clip(CircleShape)
+                        .background(colors.primary)
+                        .clickable(onClick = onPlayPause),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = colors.onPrimary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                TransportButton(
+                    icon = Icons.Rounded.FastForward,
+                    description = "Forward 30s",
+                    size = 44.dp,
+                    iconSize = 22.dp,
+                    onClick = { onSeek((position + 30_000L).coerceAtMost(duration)) },
+                )
+                Spacer(Modifier.width(2.dp))
+                TransportButton(
+                    icon = Icons.Rounded.SkipNext,
+                    description = "Next episode",
+                    enabled = hasNext,
+                    size = 38.dp,
+                    iconSize = 20.dp,
+                    onClick = onPlayNext,
+                )
+
+                Spacer(Modifier.weight(1f))
+
+                // Speed chip
+                VibePill(
+                    icon = { Icon(Icons.Rounded.Speed, null, Modifier.size(13.dp), tint = colors.onSurface) },
+                    label = "${formatSpeed(playbackSpeed)}×",
+                    onClick = { onSpeedChange(cycleSpeed(playbackSpeed)) },
+                )
+                Spacer(Modifier.width(8.dp))
+                // Sleep chip
+                val sleepLabel = sleepTimerRemaining?.let { "${(it / 60000L).coerceAtLeast(1)}m" } ?: "Sleep"
+                VibePill(
+                    icon = {
+                        Icon(
+                            Icons.Outlined.Timer,
+                            null,
+                            Modifier.size(13.dp),
+                            tint = if (sleepTimerRemaining != null) colors.primary else colors.onSurface,
+                        )
+                    },
+                    label = sleepLabel,
+                    active = sleepTimerRemaining != null,
+                    onClick = {
+                        if (sleepTimerRemaining != null) onCancelSleepTimer()
+                        else sleepSheetOpen = true
+                    },
+                )
+            }
+        }
+    }
+
+    if (sleepSheetOpen) {
+        SleepTimerPicker(
+            onDismiss = { sleepSheetOpen = false },
+            onPick = { minutes ->
+                sleepSheetOpen = false
+                onSetSleepTimer(minutes * 60_000L)
+            },
         )
     }
 }
