@@ -3,6 +3,7 @@ package com.podcastplayer.app.data.local
 import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.podcastplayer.app.data.remote.upgradeITunesArtwork
 import com.podcastplayer.app.domain.model.Podcast
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,18 +52,24 @@ class SavedPodcastsStorage(context: Context) {
     }
 
     private fun persist(list: List<Podcast>) {
-        prefs.edit().putString(KEY_PODCASTS, gson.toJson(list)).apply()
-        _savedPodcasts.value = list
+        val migrated = list.map { it.copy(artworkUrl = upgradeITunesArtwork(it.artworkUrl)) }
+        prefs.edit().putString(KEY_PODCASTS, gson.toJson(migrated)).apply()
+        _savedPodcasts.value = migrated
     }
 
     private fun load(): List<Podcast> {
         val json = prefs.getString(KEY_PODCASTS, null) ?: return emptyList()
-        return try {
+        val parsed = try {
             val type = object : TypeToken<List<Podcast>>() {}.type
-            gson.fromJson(json, type) ?: emptyList()
+            gson.fromJson<List<Podcast>>(json, type) ?: emptyList()
         } catch (_: Exception) {
-            emptyList()
+            return emptyList()
         }
+        val migrated = parsed.map { it.copy(artworkUrl = upgradeITunesArtwork(it.artworkUrl)) }
+        if (migrated != parsed) {
+            prefs.edit().putString(KEY_PODCASTS, gson.toJson(migrated)).apply()
+        }
+        return migrated
     }
 
     companion object {

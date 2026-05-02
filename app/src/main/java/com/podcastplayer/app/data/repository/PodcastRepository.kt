@@ -2,6 +2,7 @@ package com.podcastplayer.app.data.repository
 
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
+import com.podcastplayer.app.data.remote.upgradeITunesArtwork
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.domain.model.PodcastDto
@@ -46,7 +47,7 @@ class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser:
             id = collectionId.toString(),
             title = collectionName,
             artist = artistName,
-            artworkUrl = artworkUrl600 ?: artworkUrl100,
+            artworkUrl = upgradeITunesArtwork(artworkUrl600 ?: artworkUrl100),
             feedUrl = feedUrl
         )
     }
