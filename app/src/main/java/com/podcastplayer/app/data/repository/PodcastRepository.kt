@@ -46,7 +46,7 @@ class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser:
             id = collectionId.toString(),
             title = collectionName,
             artist = artistName,
-            artworkUrl = artworkUrl100,
+            artworkUrl = artworkUrl600 ?: artworkUrl100,
             feedUrl = feedUrl
         )
     }
