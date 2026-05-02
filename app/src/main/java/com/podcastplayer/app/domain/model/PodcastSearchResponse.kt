@@ -9,6 +9,7 @@ data class PodcastDto(
     val collectionId: Long,
     val collectionName: String,
     val artistName: String,
+    val artworkUrl600: String?,
     val artworkUrl100: String?,
     val feedUrl: String?
 )
