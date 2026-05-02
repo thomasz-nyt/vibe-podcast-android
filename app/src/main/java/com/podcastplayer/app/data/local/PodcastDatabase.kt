@@ -12,6 +12,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UrlDownloadEntity::class,
     ],
     version = 3,
+    // We don't use Room migrations testing yet, and `room.schemaLocation` isn't
+    // wired up; turn off schema export to silence the kapt warning.
+    exportSchema = false,
 )
 abstract class PodcastDatabase : RoomDatabase() {
     abstract fun downloadedEpisodeDao(): DownloadedEpisodeDao

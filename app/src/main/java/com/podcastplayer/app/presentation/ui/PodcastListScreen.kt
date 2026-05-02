@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PlaylistAdd
@@ -659,7 +660,7 @@ private fun UrlDownloadShortcutCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         androidx.compose.material3.Icon(
-            imageVector = androidx.compose.material.icons.Icons.Outlined.Download,
+            imageVector = Icons.Outlined.Download,
             contentDescription = null,
             tint = colors.primary,
             modifier = Modifier.size(20.dp),

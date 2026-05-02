@@ -62,7 +62,7 @@ class UrlDownloadService : Service() {
         when (action) {
             ACTION_START_PUMP -> startPumpIfNeeded()
             ACTION_CANCEL -> {
-                val id = intent.getStringExtra(EXTRA_DOWNLOAD_ID)
+                val id = intent?.getStringExtra(EXTRA_DOWNLOAD_ID)
                 if (id != null) cancelDownload(id)
             }
         }
