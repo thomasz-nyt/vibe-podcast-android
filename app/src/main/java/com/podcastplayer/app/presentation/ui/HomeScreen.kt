@@ -23,7 +23,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -40,7 +47,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
+import com.podcastplayer.app.data.local.UrlDownloadEntity
+import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.domain.model.Episode
+import com.podcastplayer.app.domain.model.MediaType
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.ContinueListeningUi
@@ -53,11 +63,17 @@ import java.util.Locale
 fun HomeScreen(
     subscriptions: List<Podcast>,
     continueListening: List<ContinueListeningUi>,
+    urlDownloads: List<UrlDownloadEntity>,
+    urlInFlight: List<UrlDownloadEntity>,
     currentEpisode: Episode?,
     currentArtworkUrl: String?,
     playerState: PlayerState,
     onOpenPodcast: (Podcast) -> Unit,
     onOpenSearch: () -> Unit,
+    onAddFromUrl: () -> Unit,
+    onPlayUrlDownload: (UrlDownloadEntity) -> Unit,
+    onDeleteUrlDownload: (String) -> Unit,
+    onCancelUrlDownload: (String) -> Unit,
     onPlayEpisode: (Episode, String?) -> Unit,
     onPlayPause: () -> Unit,
     onOpenPlayer: () -> Unit,
@@ -75,6 +91,19 @@ fun HomeScreen(
         ) {
             HomeHeader(now = now)
 
+            // Quick-action row: "Add from URL" entry point.
+            QuickActionRow(onAddFromUrl = onAddFromUrl)
+
+            // Currently downloading items, if any.
+            if (urlInFlight.isNotEmpty()) {
+                SectionHeader(label = "Saving from URL")
+                InFlightColumn(
+                    items = urlInFlight,
+                    onCancel = onCancelUrlDownload,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
             if (continueListening.isNotEmpty()) {
                 SectionHeader(label = "Continue listening")
                 ContinueListeningRow(
@@ -86,17 +115,30 @@ fun HomeScreen(
                 Spacer(Modifier.height(4.dp))
             }
 
-            if (subscriptions.isEmpty()) {
+            if (urlDownloads.isNotEmpty()) {
+                SectionHeader(
+                    label = "Saved from URL",
+                    count = urlDownloads.size,
+                )
+                UrlDownloadsRow(
+                    items = urlDownloads,
+                    onPlay = onPlayUrlDownload,
+                    onDelete = onDeleteUrlDownload,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
+            if (subscriptions.isEmpty() && urlDownloads.isEmpty() && urlInFlight.isEmpty()) {
                 VibeEmptyState(
                     icon = Icons.Outlined.Search,
                     title = "No subscriptions yet",
-                    subtitle = "Search for podcasts to start building your library",
+                    subtitle = "Search for podcasts, or paste a YouTube / X link to save offline.",
                     action = {
                         VibePrimaryPill(label = "Browse podcasts", onClick = onOpenSearch)
                     },
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                 )
-            } else {
+            } else if (subscriptions.isNotEmpty()) {
                 SectionHeader(
                     label = "Your subscriptions",
                     count = subscriptions.size,
@@ -150,6 +192,29 @@ private fun HomeHeader(now: LocalDateTime) {
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = colors.onBackground,
+        )
+    }
+}
+
+/** Quick-actions strip directly under the greeting. Currently just "Add from URL" (issue #33). */
+@Composable
+private fun QuickActionRow(onAddFromUrl: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        VibeChip(
+            label = "Add from URL",
+            onClick = onAddFromUrl,
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Outlined.Download,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                )
+            },
         )
     }
 }
@@ -267,6 +332,238 @@ private fun ContinueListeningCard(item: ContinueListeningUi, onClick: () -> Unit
     }
 }
 
+/**
+ * Horizontally-scrolling row of completed URL downloads. Each card shows
+ * thumbnail + source badge + title + format chip and plays on tap.
+ */
+@Composable
+private fun UrlDownloadsRow(
+    items: List<UrlDownloadEntity>,
+    onPlay: (UrlDownloadEntity) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    val scroll = rememberScrollState()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scroll)
+            .padding(horizontal = 20.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        items.forEach { item ->
+            UrlDownloadCard(
+                item = item,
+                onPlay = { onPlay(item) },
+                onDelete = { onDelete(item.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun UrlDownloadCard(
+    item: UrlDownloadEntity,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val mediaType = MediaType.fromTag(item.mediaType)
+    Column(
+        modifier = Modifier
+            .width(220.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.outline, RoundedCornerShape(14.dp))
+            .clickable(onClick = onPlay)
+            .padding(10.dp),
+    ) {
+        Box {
+            AsyncImage(
+                model = item.thumbnailUrl,
+                contentDescription = item.title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surfaceVariant),
+                placeholder = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                error = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                fallback = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+            )
+            // Play overlay
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.Black.copy(alpha = 0.55f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.PlayArrow,
+                    contentDescription = "Play",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            // Format badge (top-right)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = if (mediaType == MediaType.VIDEO) Icons.Outlined.Movie else Icons.Outlined.Audiotrack,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(10.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = if (mediaType == MediaType.VIDEO) "VIDEO" else "AUDIO",
+                    fontFamily = JetBrainsMono,
+                    fontSize = 8.5.sp,
+                    letterSpacing = 1.0.sp,
+                    color = Color.White,
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = UrlSource.fromTag(item.source).displayName.uppercase(),
+                fontFamily = JetBrainsMono,
+                fontSize = 9.5.sp,
+                letterSpacing = 1.4.sp,
+                color = colors.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = Icons.Outlined.Delete,
+                contentDescription = "Delete",
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier
+                    .size(14.dp)
+                    .clickable(onClick = onDelete),
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = item.title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 17.sp,
+        )
+        if (!item.uploader.isNullOrBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = item.uploader,
+                fontSize = 11.sp,
+                color = colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Currently-downloading items shown in a column with progress + cancel. */
+@Composable
+private fun InFlightColumn(
+    items: List<UrlDownloadEntity>,
+    onCancel: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items.forEach { item ->
+            InFlightCard(item = item, onCancel = { onCancel(item.id) })
+        }
+    }
+}
+
+@Composable
+private fun InFlightCard(item: UrlDownloadEntity, onCancel: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.outline, RoundedCornerShape(14.dp))
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(
+                model = item.thumbnailUrl,
+                contentDescription = item.title,
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surfaceVariant),
+                placeholder = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                error = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                fallback = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 17.sp,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "${UrlSource.fromTag(item.source).displayName.uppercase()} · ${item.mediaType.uppercase()}",
+                    fontFamily = JetBrainsMono,
+                    fontSize = 9.5.sp,
+                    letterSpacing = 1.4.sp,
+                    color = colors.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.Close,
+                contentDescription = "Cancel",
+                tint = colors.onSurfaceVariant,
+                modifier = Modifier
+                    .size(18.dp)
+                    .clickable(onClick = onCancel),
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        LinearProgressIndicator(
+            progress = (item.progressPercent / 100f).coerceIn(0f, 1f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(RoundedCornerShape(2.dp)),
+            color = colors.primary,
+            trackColor = colors.outline,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = statusLabel(item),
+            fontFamily = JetBrainsMono,
+            fontSize = 10.sp,
+            color = colors.onSurfaceVariant,
+        )
+    }
+}
+
 @Composable
 private fun SubscriptionsGrid(
     podcasts: List<Podcast>,
@@ -341,7 +638,7 @@ private fun SubscriptionTile(
     }
 }
 
-// ─── helpers ─────────────────────────────────────────────────────
+// ─── helpers ────────────────────────────────────────────────────────
 
 private fun greeting(hour: Int): String = when {
     hour < 12 -> "Good morning."
@@ -363,4 +660,16 @@ private fun formatRemaining(ms: Long): String {
     val h = totalSec / 3600
     val m = (totalSec % 3600) / 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+private fun statusLabel(item: UrlDownloadEntity): String {
+    val status = com.podcastplayer.app.data.repository.UrlDownloadStatus.entries
+        .firstOrNull { it.name == item.status }
+    return when (status) {
+        com.podcastplayer.app.data.repository.UrlDownloadStatus.QUEUED -> "QUEUED"
+        com.podcastplayer.app.data.repository.UrlDownloadStatus.EXTRACTING_METADATA -> "READING METADATA"
+        com.podcastplayer.app.data.repository.UrlDownloadStatus.DOWNLOADING ->
+            "DOWNLOADING · ${item.progressPercent.toInt()}%"
+        else -> item.status.uppercase()
+    }
 }
