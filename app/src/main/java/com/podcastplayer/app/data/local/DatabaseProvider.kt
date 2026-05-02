@@ -16,7 +16,10 @@ object DatabaseProvider {
                 PodcastDatabase::class.java,
                 DATABASE_NAME
             )
-                .addMigrations(PodcastDatabase.MIGRATION_1_2)
+                .addMigrations(
+                    PodcastDatabase.MIGRATION_1_2,
+                    PodcastDatabase.MIGRATION_2_3,
+                )
                 .build()
                 .also { instance = it }
         }
