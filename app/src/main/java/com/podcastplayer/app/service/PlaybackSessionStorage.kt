@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import com.podcastplayer.app.data.remote.upgradeITunesArtwork
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -69,7 +70,10 @@ class PlaybackSessionStorage(context: Context) {
                     .setTitle(itemJson.optString("title").ifBlank { null })
                     .setArtist(itemJson.optString("artist").ifBlank { null })
                     .setDescription(itemJson.optString("description").ifBlank { null })
-                    .setArtworkUri(itemJson.optString("artworkUri").ifBlank { null }?.let(android.net.Uri::parse))
+                    .setArtworkUri(
+                        upgradeITunesArtwork(itemJson.optString("artworkUri").ifBlank { null })
+                            ?.let(android.net.Uri::parse)
+                    )
                     .build()
 
                 items += MediaItem.Builder()
