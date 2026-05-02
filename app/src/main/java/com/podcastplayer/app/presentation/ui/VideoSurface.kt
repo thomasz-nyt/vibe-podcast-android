@@ -1,9 +1,17 @@
 package com.podcastplayer.app.presentation.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FullscreenExit
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -11,8 +19,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -25,9 +35,13 @@ import com.podcastplayer.app.service.PlayerController
  * Compose surface that renders the active Media3 player's video output (issue #33).
  *
  * The screen above already drives playback through [PlayerController]; this
- * composable just attaches a `PlayerView` to the same [MediaController] so the
+ * composable just attaches a `PlayerView` to the same `MediaController` so the
  * frames render. Custom transport controls live in the parent — we set
  * `useController = false` and only show the surface.
+ *
+ * Optionally renders a small fullscreen-toggle button overlay (bottom-right).
+ * The button is intended for the embedded portrait surface; in landscape /
+ * dedicated-fullscreen mode the parent layout owns its own exit affordance.
  *
  * Until the `MediaController` is available (the future resolves async), we
  * render a placeholder background so the layout doesn't jump.
@@ -36,6 +50,9 @@ import com.podcastplayer.app.service.PlayerController
 fun VideoSurface(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 20.dp,
+    showFullscreenToggle: Boolean = false,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val controller = remember { PlayerController.getInstance(context) }
@@ -50,7 +67,7 @@ fun VideoSurface(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(cornerRadius))
-            .background(colors.surfaceVariant),
+            .background(if (isFullscreen) Color.Black else colors.surfaceVariant),
     ) {
         val current = player
         if (current != null) {
@@ -70,6 +87,26 @@ fun VideoSurface(
                 modifier = Modifier.fillMaxSize(),
             )
         }
+
+        if (showFullscreenToggle && onToggleFullscreen != null) {
+            // Bottom-right corner — YouTube-style placement.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .clickable(onClick = onToggleFullscreen),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (isFullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
+                    contentDescription = if (isFullscreen) "Exit fullscreen" else "Fullscreen",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
-
