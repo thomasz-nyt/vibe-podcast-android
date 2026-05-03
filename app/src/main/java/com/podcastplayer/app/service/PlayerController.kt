@@ -161,8 +161,23 @@ class PlayerController private constructor(private val context: Context) {
             duration = null,
             imageUrl = item.mediaMetadata.artworkUri?.toString(),
             isDownloaded = isLocal,
-            localPath = if (isLocal) item.localConfiguration?.uri?.path else null
+            localPath = if (isLocal) item.localConfiguration?.uri?.path else null,
+            mediaType = inferMediaType(uri),
         )
+    }
+
+    /**
+     * Best-effort inference of [com.podcastplayer.app.domain.model.MediaType] from a file
+     * URI's extension, used when restoring a session (issue #33). Defaults to AUDIO.
+     */
+    private fun inferMediaType(uri: String): com.podcastplayer.app.domain.model.MediaType {
+        val ext = uri.substringAfterLast('.', "").substringBefore('?').lowercase()
+        val videoExts = setOf("mp4", "webm", "mkv", "mov", "avi", "m4v")
+        return if (ext in videoExts) {
+            com.podcastplayer.app.domain.model.MediaType.VIDEO
+        } else {
+            com.podcastplayer.app.domain.model.MediaType.AUDIO
+        }
     }
 
     suspend fun restoreLastSessionIfNeeded(): com.podcastplayer.app.domain.model.Episode? {
@@ -195,6 +210,14 @@ class PlayerController private constructor(private val context: Context) {
         MediaController.releaseFuture(controllerFuture)
         executor.shutdown()
     }
+
+    /**
+     * Suspends until the underlying [MediaController] is available, then returns it.
+     *
+     * Used by the video player surface (issue #33) to bind an Android `PlayerView`
+     * to the same Player instance that drives audio playback.
+     */
+    suspend fun awaitController(): MediaController = controllerFuture.await()
 
     companion object {
         @Volatile

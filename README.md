@@ -10,6 +10,9 @@ A simple podcast player app built with Kotlin and Jetpack Compose.
 - **Offline Playback**: Download episodes for offline listening
 - **Background Play**: Foreground service with media session for background playback
 - **Player Controls**: Play/pause, seek, playback speed control
+- **Add from URL**: Paste / share / type a YouTube or X (Twitter) URL and save the
+  audio (MP3) or video (MP4) for fully offline playback. Powered by yt-dlp via
+  [`youtubedl-android`](https://github.com/yausername/youtubedl-android).
 
 ## Architecture
 
@@ -99,6 +102,35 @@ This project expects **JDK 17**. If your system `java` is newer and Gradle fails
 
 - `PlayerService.kt`: Media session service for background playback
 - `PlayerController.kt`: Interface to control the player service
+- `UrlDownloadService.kt`: Foreground service that drives yt-dlp downloads for
+  the "Add from URL" feature, surfacing progress in the notification shade
+
+### Add-from-URL feature (issue #33)
+
+The "Add from URL" flow lets the user feed an external video/audio link from
+YouTube or X into the same offline-first playback pipeline as podcast episodes.
+
+Three converged entry points all open the same screen:
+
+1. **Share intent** — share-to-app from YouTube / X (or any app that emits a
+   text/plain URL).
+2. **Paste in search** — pasting a recognized link into the Search screen
+   surfaces a "Save offline" affordance above the results.
+3. **Dedicated button** — "Add from URL" chip on the Home screen.
+
+Pipeline:
+
+- `UrlDownloadRepository` extracts metadata via `yt-dlp --dump-json`.
+- The user picks audio (MP3, extracted via ffmpeg) or video (MP4, h264+aac merged).
+- A row is inserted into Room (`url_downloads` table) and `UrlDownloadService`
+  drains the queue serially, posting progress updates back through the repo.
+- Completed items appear in a "Saved from URL" section on the home screen and
+  play through the existing Media3 player. Video items render via a `PlayerView`
+  surface in the player screen; audio items reuse the artwork view.
+
+> ⚠️ **Personal/internal use.** YouTube and X Terms of Service generally prohibit
+> unauthorized downloading. Distribution through the Play Store is **not**
+> recommended for builds with this feature enabled.
 
 ## API Endpoints
 

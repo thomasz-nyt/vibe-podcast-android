@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PlaylistAdd
@@ -85,6 +86,7 @@ fun PodcastListScreen(
     onOpenQueue: () -> Unit,
     @Suppress("UNUSED_PARAMETER") onOpenDownloads: () -> Unit,
     onPlayQueue: () -> Unit,
+    onAddFromUrl: (String) -> Unit = {},
     onExportOpml: () -> Unit = {},
     onImportOpml: () -> Unit = {},
 ) {
@@ -177,6 +179,30 @@ fun PodcastListScreen(
                         focusManager.clearFocus()
                     },
                 )
+
+                // When a YouTube / X URL is pasted into the search field, surface a
+                // direct "Download from URL" affordance so the user doesn't have to
+                // back out and find the home-screen entry. (Issue #33)
+                val pastedUrl = remember(searchQuery) {
+                    com.podcastplayer.app.data.repository.UrlValidator.extractFirstUrl(searchQuery)
+                }
+                val pastedSource = remember(pastedUrl) {
+                    pastedUrl?.let { com.podcastplayer.app.data.repository.UrlSource.classify(it) }
+                }
+                if (pastedUrl != null &&
+                    pastedSource != null &&
+                    pastedSource != com.podcastplayer.app.data.repository.UrlSource.OTHER
+                ) {
+                    UrlDownloadShortcutCard(
+                        url = pastedUrl,
+                        source = pastedSource,
+                        onClick = {
+                            focusManager.clearFocus()
+                            onAddFromUrl(pastedUrl)
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
 
                 if (showSaved && queues.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
@@ -610,4 +636,52 @@ private fun QueuePickerDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/**
+ * Inline card shown when the user pastes a YouTube / X URL into the search field.
+ * Tapping it opens the AddFromUrl flow with the URL pre-filled (issue #33).
+ */
+@Composable
+private fun UrlDownloadShortcutCard(
+    url: String,
+    source: com.podcastplayer.app.data.repository.UrlSource,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+            .background(colors.primaryContainer)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Icon(
+            imageVector = Icons.Outlined.Download,
+            contentDescription = null,
+            tint = colors.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Save this ${source.displayName} link offline",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.onSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = url,
+                fontFamily = com.podcastplayer.app.ui.theme.JetBrainsMono,
+                fontSize = 10.5.sp,
+                color = colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+    }
 }

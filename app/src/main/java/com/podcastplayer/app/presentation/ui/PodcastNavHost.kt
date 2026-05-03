@@ -36,6 +36,7 @@ import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PlayerViewModel
 import com.podcastplayer.app.presentation.viewmodel.PodcastViewModel
+import com.podcastplayer.app.presentation.viewmodel.UrlDownloadViewModel
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.service.PlaybackSessionStorage
 import com.podcastplayer.app.service.PlayerController
@@ -56,13 +57,27 @@ private object Routes {
     const val EpisodesPattern = "$EpisodesBase/{$PodcastIdArg}"
 
     fun episodes(podcastId: String): String = "$EpisodesBase/${Uri.encode(podcastId)}"
+
+    // "Add from URL" flow (issue #33). The optional `url` query arg is filled in
+    // when arriving via a Share intent or paste shortcut so the screen can
+    // auto-populate and start metadata extraction.
+    const val AddUrlBase = "add-url"
+    const val UrlArg = "url"
+    const val AddUrlPattern = "$AddUrlBase?$UrlArg={$UrlArg}"
+
+    fun addUrl(rawUrl: String? = null): String =
+        if (rawUrl.isNullOrBlank()) AddUrlBase else "$AddUrlBase?$UrlArg=${Uri.encode(rawUrl)}"
 }
 
 @Composable
-fun PodcastNavHost() {
+fun PodcastNavHost(
+    sharedUrl: String? = null,
+    onSharedUrlConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val db = remember { DatabaseProvider.getDatabase(context) }
     val queueStorage = remember { QueueStorage(context) }
+    val application = context.applicationContext as android.app.Application
 
     // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
     val podcastViewModel: PodcastViewModel = viewModel(
@@ -79,6 +94,9 @@ fun PodcastNavHost() {
             PlayerController.getInstance(context),
             PlaybackSessionStorage(context)
         )
+    )
+    val urlDownloadViewModel: UrlDownloadViewModel = viewModel(
+        factory = UrlDownloadViewModelFactory(application)
     )
 
     val navController = rememberNavController()
@@ -172,6 +190,16 @@ fun PodcastNavHost() {
         }
     }
 
+    // React to a Share intent (issue #33). MainActivity hands us the URL via [sharedUrl];
+    // we navigate to the AddFromUrl screen and clear the slot so we don't loop.
+    LaunchedEffect(sharedUrl) {
+        val url = sharedUrl ?: return@LaunchedEffect
+        navController.navigate(Routes.addUrl(url)) {
+            launchSingleTop = true
+        }
+        onSharedUrlConsumed()
+    }
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val bottomNavRoutes = setOf(Routes.Home, Routes.Search, Routes.Queue, Routes.Downloads)
@@ -220,10 +248,18 @@ fun PodcastNavHost() {
                     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
                     val playerState by playerViewModel.playerState.collectAsState()
                     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
+                    val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
+                    val urlInFlight by urlDownloadViewModel.inFlightDownloads.collectAsState()
+
+                    val urlRepository = remember(context) {
+                        com.podcastplayer.app.data.repository.UrlDownloadRepository(context)
+                    }
 
                     HomeScreen(
                         subscriptions = savedPodcasts,
                         continueListening = continueListening,
+                        urlDownloads = urlDownloads,
+                        urlInFlight = urlInFlight,
                         currentEpisode = currentEpisode,
                         currentArtworkUrl = currentArtworkUrl,
                         playerState = playerState,
@@ -232,6 +268,16 @@ fun PodcastNavHost() {
                             navController.navigate(Routes.episodes(podcast.id))
                         },
                         onOpenSearch = { navController.navigate(Routes.Search) },
+                        onAddFromUrl = { navController.navigate(Routes.addUrl()) },
+                        onPlayUrlDownload = { entity ->
+                            val episode = urlRepository.toEpisode(entity)
+                            if (episode != null) {
+                                playerViewModel.playEpisode(episode, entity.thumbnailUrl)
+                                navController.navigate(Routes.Player)
+                            }
+                        },
+                        onDeleteUrlDownload = { id -> urlDownloadViewModel.deleteDownload(id) },
+                        onCancelUrlDownload = { id -> urlDownloadViewModel.cancelDownload(id) },
                         onPlayEpisode = { episode, artwork ->
                             playerViewModel.playEpisode(episode, artwork)
                             navController.navigate(Routes.Player)
@@ -240,6 +286,38 @@ fun PodcastNavHost() {
                         onOpenPlayer = { navController.navigate(Routes.Player) },
                         onSeek = { playerViewModel.seekTo(it) },
                         onDismissPlayer = { playerViewModel.clearPlayer() },
+                    )
+                }
+
+                composable(
+                    route = Routes.AddUrlPattern,
+                    arguments = listOf(
+                        navArgument(Routes.UrlArg) {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        }
+                    )
+                ) { backStackEntry ->
+                    val incomingUrl = backStackEntry.arguments?.getString(Routes.UrlArg).orEmpty()
+                    val previewState by urlDownloadViewModel.previewState.collectAsState()
+                    val selectedMediaType by urlDownloadViewModel.selectedMediaType.collectAsState()
+
+                    AddFromUrlScreen(
+                        initialUrl = incomingUrl,
+                        previewState = previewState,
+                        selectedMediaType = selectedMediaType,
+                        onUrlChange = { /* no-op: text field is local */ },
+                        onLoadPreview = { urlDownloadViewModel.loadPreview(it) },
+                        onSelectMediaType = { urlDownloadViewModel.setMediaType(it) },
+                        onConfirm = {
+                            urlDownloadViewModel.confirmCurrentDownload()
+                            navController.popBackStack(route = Routes.Home, inclusive = false)
+                        },
+                        onBack = {
+                            urlDownloadViewModel.resetPreview()
+                            navController.popBackStack(route = Routes.Home, inclusive = false)
+                        },
                     )
                 }
 
@@ -271,6 +349,9 @@ fun PodcastNavHost() {
                                     }
                                 }
                             }
+                        },
+                        onAddFromUrl = { rawUrl ->
+                            navController.navigate(Routes.addUrl(rawUrl))
                         },
                         onExportOpml = { exportLauncher.launch("vibe-podcasts.opml") },
                         onImportOpml = {

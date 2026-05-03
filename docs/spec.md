@@ -49,3 +49,51 @@
 - **Home refinements:** hide Saved section on search focus; saved empty-state card with CTA.
 - **Episode detail improvements:** show episode image when available; strip HTML descriptions; show duration + date metadata.
 - **Sleep timer UX:** adjustable +/- controls, default 15 min; inline cancel when active.
+
+---
+
+# Podcast Player – Session Notes (2026-05-02)
+
+## Add from URL — YouTube / X offline downloads (issue #33)
+
+Shipped per [docs/specs/006-url-downloads.md](specs/006-url-downloads.md). Lets
+the user paste, share, or type a YouTube or X (Twitter) URL and save the audio
+(MP3) or video (MP4) for fully offline playback alongside podcast episodes.
+
+### Headlines
+
+- **Three converging entry points** — Share intent, search-paste shortcut card,
+  and a home-screen "Add from URL" chip — all open the same `AddFromUrlScreen`.
+- **On-device extraction** via [`youtubedl-android` 0.18.1](https://github.com/yausername/youtubedl-android)
+  (yt-dlp + ffmpeg). Initialized once in a new `PodcastApplication` class; the
+  yt-dlp Python script self-updates from upstream on launch.
+- **Foreground service (`dataSync`)** drains a serial queue with progress
+  notifications. Concurrency capped at 1.
+- **DB v2 → v3** — new `url_downloads` Room table, separate from
+  `downloaded_episodes`. Migration registered.
+- **Player video support** — `Episode` gains an optional `mediaType` field
+  (default `AUDIO`); `PlayerScreen` renders a Media3 `PlayerView`
+  (`VideoSurface`) in the artwork slot when the current episode is video.
+
+### Decisions (2026-05-02)
+
+- Personal/internal use only — Play Store ToS risk acknowledged and accepted.
+- Single converged screen (`AddFromUrlScreen`) for all three entry flows;
+  avoids a bottom-sheet / full-screen split.
+- Audio-default in the format picker (smaller files, podcast-like UX).
+- App-private storage at `filesDir/url_downloads/` (not external Downloads).
+- Stable IDs hash the canonicalized URL + media type so the same URL can exist
+  as audio AND video without colliding.
+- Synthetic `podcastId = "vibe-url-downloads"` keeps URL items out of
+  saved-podcast / queue logic.
+- Scope-trim: no Downloads-screen surfacing of URL items, no Wi-Fi-only
+  setting, no PiP, no cookie-auth — all flagged as v2 candidates in §15 of
+  the spec.
+
+### Open follow-ups
+
+- ABI splits for the youtubedl-android native libs to chop ~40MB off the APK.
+- Android 15 16KB-page-size verification of the bundled native libs.
+- Reconcile logic for orphaned `DOWNLOADING` rows on service start (process
+  death edge case).
+- `Downloads` screen surfacing of URL items (currently only Home).

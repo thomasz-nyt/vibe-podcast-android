@@ -1,5 +1,8 @@
 package com.podcastplayer.app.presentation.ui
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.rounded.FastForward
@@ -34,6 +38,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -48,9 +56,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.text.HtmlCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
+import com.podcastplayer.app.domain.model.MediaType
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
@@ -80,6 +92,74 @@ fun PlayerScreen(
     val position = playerState.currentPosition.coerceIn(0L, duration)
 
     var sleepSheetOpen by remember { mutableStateOf(false) }
+
+    // ─── Fullscreen video plumbing (issue #33) ───────────────────────────
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val isVideo = episode.mediaType == MediaType.VIDEO
+    val isVideoFullscreen = isVideo && isLandscape
+
+    fun enterFullscreen() {
+        // Lock to landscape; the orientation change recomposes us into the
+        // dedicated PlayerVideoFullscreen layout below.
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+    }
+
+    fun exitFullscreen() {
+        // Force back to portrait so we drop out of the fullscreen branch even
+        // if the device is being held in landscape (auto-rotate is honored
+        // again when the user navigates away — see DisposableEffect below).
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
+
+    // Hide system bars while in fullscreen video; restore on exit.
+    DisposableEffect(isVideoFullscreen) {
+        val window = activity?.window
+        if (isVideoFullscreen && window != null) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
+        onDispose {
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowInsetsControllerCompat(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
+    // When PlayerScreen leaves the back stack entirely, release any orientation
+    // lock so other screens follow the user's auto-rotate setting.
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    // While fullscreen, intercept back to drop fullscreen first instead of
+    // dismissing the player. Disabled otherwise — the NavHost-level handler
+    // takes over.
+    BackHandler(enabled = isVideoFullscreen) { exitFullscreen() }
+
+    if (isVideoFullscreen) {
+        PlayerVideoFullscreen(
+            episode = episode,
+            isPlaying = isPlaying,
+            position = position,
+            duration = duration,
+            hasPrevious = hasPrevious,
+            hasNext = hasNext,
+            onPlayPause = onPlayPause,
+            onPlayPrevious = onPlayPrevious,
+            onPlayNext = onPlayNext,
+            onSeek = onSeek,
+            onExitFullscreen = ::exitFullscreen,
+        )
+        return
+    }
 
     if (isLandscape) {
         PlayerLandscape(
@@ -161,14 +241,27 @@ fun PlayerScreen(
                     .clip(RoundedCornerShape(20.dp))
                     .border(1.dp, colors.outline, RoundedCornerShape(20.dp)),
             ) {
-                AsyncImage(
-                    model = episode.imageUrl ?: artworkUrl,
-                    contentDescription = episode.title,
-                    placeholder = painterResource(R.drawable.ic_artwork_placeholder),
-                    error = painterResource(R.drawable.ic_artwork_placeholder),
-                    fallback = painterResource(R.drawable.ic_artwork_placeholder),
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (episode.mediaType == MediaType.VIDEO) {
+                    // URL-downloaded videos render the actual frames here while the
+                    // existing transport bar below still drives playback (issue #33).
+                    // The toggle promotes us into the dedicated fullscreen layout.
+                    VideoSurface(
+                        modifier = Modifier.fillMaxSize(),
+                        cornerRadius = 20.dp,
+                        showFullscreenToggle = true,
+                        isFullscreen = false,
+                        onToggleFullscreen = ::enterFullscreen,
+                    )
+                } else {
+                    AsyncImage(
+                        model = episode.imageUrl ?: artworkUrl,
+                        contentDescription = episode.title,
+                        placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                        error = painterResource(R.drawable.ic_artwork_placeholder),
+                        fallback = painterResource(R.drawable.ic_artwork_placeholder),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
@@ -517,14 +610,18 @@ private fun PlayerLandscape(
                     .clip(RoundedCornerShape(18.dp))
                     .border(1.dp, colors.outline, RoundedCornerShape(18.dp)),
             ) {
-                AsyncImage(
-                    model = episode.imageUrl ?: artworkUrl,
-                    contentDescription = episode.title,
-                    placeholder = painterResource(R.drawable.ic_artwork_placeholder),
-                    error = painterResource(R.drawable.ic_artwork_placeholder),
-                    fallback = painterResource(R.drawable.ic_artwork_placeholder),
-                    modifier = Modifier.fillMaxSize(),
-                )
+                if (episode.mediaType == MediaType.VIDEO) {
+                    VideoSurface(modifier = Modifier.fillMaxSize(), cornerRadius = 18.dp)
+                } else {
+                    AsyncImage(
+                        model = episode.imageUrl ?: artworkUrl,
+                        contentDescription = episode.title,
+                        placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+                        error = painterResource(R.drawable.ic_artwork_placeholder),
+                        fallback = painterResource(R.drawable.ic_artwork_placeholder),
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
@@ -681,6 +778,192 @@ private fun PlayerLandscape(
                 sleepSheetOpen = false
                 onSetSleepTimer(minutes * 60_000L)
             },
+        )
+    }
+}
+
+/**
+ * Immersive landscape video layout (issue #33).
+ *
+ * Reached when [Episode.mediaType] is `VIDEO` and the activity is in landscape —
+ * either because the user rotated the device or because the portrait fullscreen
+ * toggle locked the orientation.
+ *
+ * The video fills the screen, with a dim overlay at the top (title + exit
+ * button) and bottom (scrubber + transport). Sleep timer / speed pills are
+ * intentionally hidden here to keep the canvas clean — those still live in the
+ * portrait player one rotation away.
+ */
+@Composable
+private fun PlayerVideoFullscreen(
+    episode: Episode,
+    isPlaying: Boolean,
+    position: Long,
+    duration: Long,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+    onPlayPause: () -> Unit,
+    onPlayPrevious: () -> Unit,
+    onPlayNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onExitFullscreen: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
+        // Frames fill the entire screen.
+        VideoSurface(
+            modifier = Modifier.fillMaxSize(),
+            cornerRadius = 0.dp,
+            showFullscreenToggle = false,
+            isFullscreen = true,
+            onToggleFullscreen = null,
+        )
+
+        // ─── Top overlay: title + exit fullscreen ────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopStart)
+                .padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = episode.title,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(12.dp))
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .clickable(onClick = onExitFullscreen),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.FullscreenExit,
+                    contentDescription = "Exit fullscreen",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+
+        // ─── Bottom overlay: scrubber + transport ────────────────────────
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+        ) {
+            Slider(
+                value = position.coerceIn(0L, duration).toFloat(),
+                onValueChange = { onSeek(it.toLong()) },
+                valueRange = 0f..duration.toFloat(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.35f),
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = formatPlayerTime(position),
+                    color = Color.White,
+                    fontFamily = JetBrainsMono,
+                    fontSize = 11.sp,
+                )
+                Text(
+                    text = "-${formatPlayerTime((duration - position).coerceAtLeast(0L))}",
+                    color = Color.White,
+                    fontFamily = JetBrainsMono,
+                    fontSize = 11.sp,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FullscreenControlButton(
+                    icon = Icons.Rounded.SkipPrevious,
+                    description = "Previous",
+                    enabled = hasPrevious,
+                    onClick = onPlayPrevious,
+                )
+                FullscreenControlButton(
+                    icon = Icons.Rounded.FastRewind,
+                    description = "Rewind 15s",
+                    onClick = { onSeek((position - 15_000L).coerceAtLeast(0L)) },
+                )
+                // Primary play/pause — large white circle, mirrors portrait UI.
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .clickable(onClick = onPlayPause),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.Black,
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+                FullscreenControlButton(
+                    icon = Icons.Rounded.FastForward,
+                    description = "Forward 30s",
+                    onClick = { onSeek((position + 30_000L).coerceAtMost(duration)) },
+                )
+                FullscreenControlButton(
+                    icon = Icons.Rounded.SkipNext,
+                    description = "Next",
+                    enabled = hasNext,
+                    onClick = onPlayNext,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullscreenControlButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    val tint = if (enabled) Color.White else Color.White.copy(alpha = 0.4f)
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.45f))
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = tint,
+            modifier = Modifier.size(24.dp),
         )
     }
 }

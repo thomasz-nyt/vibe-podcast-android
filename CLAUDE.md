@@ -109,11 +109,13 @@ Both ViewModels are scoped at the `PodcastNavHost` top level so state survives n
 
 Routes:
 ```
+"home"                   → HomeScreen
 "search"                 → PodcastListScreen
 "episodes/{podcastId}"   → EpisodeListScreen
 "queue"                  → QueueScreen
 "downloads"              → DownloadsScreen
 "player"                 → PlayerScreen
+"add-url?url={url}"      → AddFromUrlScreen   (issue #33)
 ```
 
 All "back" presses pop to `"search"` (inclusive = false) rather than following the system back stack.
@@ -153,9 +155,46 @@ Exposed `StateFlow` values:
 
 **`data/local/QueueStorage.kt`** — SharedPreferences `podcast_queues` pref. Manages named queues of podcast IDs. Creates a default `"Morning"` queue on first run.
 
-**`data/local/PodcastDatabase.kt`** — Room database (v2). Tables:
-- `downloaded_episodes` — downloaded episode metadata
+**`data/local/PodcastDatabase.kt`** — Room database (v3). Tables:
+- `downloaded_episodes` — RSS-podcast download metadata
 - `playback_progress` — per-episode listen position and completion status
+- `url_downloads` — URL-downloaded media (issue #33), separate from RSS downloads
+
+### Add-from-URL feature (issue #33)
+**`PodcastApplication.kt`** — Application class that initializes `YoutubeDL` + `FFmpeg`
+on a background coroutine and attempts a yt-dlp binary refresh. `youtubeDlReady`
+is the gate the repository checks before invoking yt-dlp.
+
+**`data/repository/UrlDownloadRepository.kt`** — Owns metadata extraction
+(`yt-dlp --dump-json`), the `url_downloads` Room rows, and the on-disk download
+dir (`filesDir/url_downloads/`). Builds `YoutubeDLRequest` for audio (MP3 via
+ffmpeg) vs video (mp4 merge). Maps completed entities to `Episode` for the
+existing player pipeline.
+
+**`data/repository/UrlSource.kt`** — `UrlSource` enum (YouTube / X / Other) with
+host-based `classify(url)`, `UrlDownloadStatus` enum, and `UrlValidator` (regex
+URL extraction, canonicalization with tracking-param stripping, stable IDs).
+
+**`service/UrlDownloadService.kt`** — Foreground service (type: `dataSync`) that
+drains the URL download queue serially. Concurrency capped at 1; cancel via
+`destroyProcessById`.
+
+**`presentation/viewmodel/UrlDownloadViewModel.kt`** — `AndroidViewModel` exposing
+`previewState`, `selectedMediaType`, `completedDownloads`, `inFlightDownloads`.
+`confirmCurrentDownload()` enqueues + kicks the service.
+
+**`presentation/ui/AddFromUrlScreen.kt`** — Single converged entry point: paste,
+share intent, and dedicated button all land here. Shows metadata preview +
+audio/video toggle + confirm.
+
+**`presentation/ui/VideoSurface.kt`** — Composable wrapper around Media3
+`PlayerView`, bound to the same `MediaController` that drives audio playback.
+Used inside `PlayerScreen` when `episode.mediaType == MediaType.VIDEO`.
+
+Manifest hooks:
+- `MainActivity` is `singleTask` and registers `ACTION_SEND` text/plain so
+  share-to-app works from YouTube/X/etc.
+- `UrlDownloadService` is declared with `foregroundServiceType="dataSync"`.
 
 ### Service Layer
 **`service/PlayerService.kt`** — `MediaSessionService` wrapping ExoPlayer. Handles:

@@ -16,6 +16,20 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // youtubedl-android requires native libs that are extracted at runtime.
+        ndk {
+            // Match the ABIs published by youtubedl-android.
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+        }
+    }
+
+    // youtubedl-android's bundled Python runtime & yt-dlp script need to be
+    // extracted from the APK on first launch — they are not loaded as JNI libs.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {
@@ -77,6 +91,15 @@ dependencies {
     kapt("androidx.room:room-compiler:2.6.1")
 
     implementation("io.coil-kt:coil-compose:2.5.0")
+
+    // youtubedl-android — yt-dlp wrapper for on-device YouTube/X/etc. extraction.
+    // Used by the "Add from URL" feature (issue #33).
+    // NOTE: pulls in a bundled Python runtime + scripts; expect ~50MB APK growth.
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
