@@ -2,6 +2,8 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.OpmlExportSummary
+import com.podcastplayer.app.data.local.OpmlImportData
 import com.podcastplayer.app.data.local.OpmlManager
 import com.podcastplayer.app.data.local.PlaybackProgressDao
 import com.podcastplayer.app.data.local.PlaybackProgressEntity
@@ -324,9 +326,11 @@ class PodcastViewModel(
 
     suspend fun exportOpml(outputStream: OutputStream) {
         withContext(Dispatchers.IO) {
-            OpmlManager.writeOpml(_savedPodcasts.value, outputStream)
+            OpmlManager.writeOpml(_savedPodcasts.value, queueStorage.queues.value, outputStream)
         }.fold(
-            onSuccess = { count -> _opmlResult.value = OpmlResult.ExportSuccess(count) },
+            onSuccess = { summary ->
+                _opmlResult.value = OpmlResult.ExportSuccess(summary.podcastCount, summary.queueCount)
+            },
             onFailure = { e -> _opmlResult.value = OpmlResult.Error(e.message ?: "Export failed") }
         )
     }
@@ -335,9 +339,10 @@ class PodcastViewModel(
         withContext(Dispatchers.IO) {
             OpmlManager.readOpml(inputStream)
         }.fold(
-            onSuccess = { podcasts ->
-                savedPodcastsStorage.saveAll(podcasts)
-                _opmlResult.value = OpmlResult.ImportSuccess(podcasts.size)
+            onSuccess = { data ->
+                savedPodcastsStorage.saveAll(data.podcasts)
+                queueStorage.mergeImportedQueues(data.queues)
+                _opmlResult.value = OpmlResult.ImportSuccess(data.podcasts.size, data.queues.size)
             },
             onFailure = { e -> _opmlResult.value = OpmlResult.Error(e.message ?: "Import failed") }
         )
@@ -418,7 +423,7 @@ sealed class EpisodesUiState {
 }
 
 sealed class OpmlResult {
-    data class ExportSuccess(val count: Int) : OpmlResult()
-    data class ImportSuccess(val count: Int) : OpmlResult()
+    data class ExportSuccess(val podcastCount: Int, val queueCount: Int) : OpmlResult()
+    data class ImportSuccess(val podcastCount: Int, val queueCount: Int) : OpmlResult()
     data class Error(val message: String) : OpmlResult()
 }

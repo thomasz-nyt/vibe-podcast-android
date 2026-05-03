@@ -117,8 +117,10 @@ fun PodcastListScreen(
     LaunchedEffect(opmlResult) {
         val result = opmlResult ?: return@LaunchedEffect
         val message = when (result) {
-            is OpmlResult.ExportSuccess -> "Exported ${result.count} subscriptions"
-            is OpmlResult.ImportSuccess -> "Imported ${result.count} subscriptions"
+            is OpmlResult.ExportSuccess -> "Exported ${result.podcastCount} subscriptions" +
+                if (result.queueCount > 0) " and ${result.queueCount} queues" else ""
+            is OpmlResult.ImportSuccess -> "Imported ${result.podcastCount} subscriptions" +
+                if (result.queueCount > 0) " and ${result.queueCount} queues" else ""
             is OpmlResult.Error -> "Error: ${result.message}"
         }
         snackbarHostState.showSnackbar(message)

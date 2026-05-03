@@ -124,6 +124,19 @@ class QueueStorage(context: Context) {
         return _queues.value.filter { it.podcastIds.contains(podcastId) }.map { it.id }.toSet()
     }
 
+    suspend fun mergeImportedQueues(imported: List<QueuePayload>) = mutex.withLock {
+        if (imported.isEmpty()) return@withLock
+        val existing = _queues.value
+        // Drop the auto-created empty "Morning" if it's the only queue, to avoid duplicates.
+        val base = if (existing.size == 1 &&
+            existing[0].name == "Morning" &&
+            existing[0].podcastIds.isEmpty()
+        ) emptyList() else existing
+        val byId = base.associateBy { it.id }.toMutableMap()
+        for (q in imported) byId[q.id] = q
+        persist(byId.values.toList())
+    }
+
     private fun persist(list: List<QueuePayload>) {
         prefs.edit().putString(KEY_QUEUES, gson.toJson(list)).apply()
         _queues.value = list
