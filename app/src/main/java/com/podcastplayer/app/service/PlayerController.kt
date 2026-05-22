@@ -194,10 +194,27 @@ class PlayerController private constructor(private val context: Context) {
         if (localPath.startsWith("content://")) Uri.parse(localPath) else Uri.fromFile(File(localPath))
 
     /**
-     * Best-effort inference of [com.podcastplayer.app.domain.model.MediaType] from a file
-     * URI's extension, used when restoring a session (issue #33). Defaults to AUDIO.
+     * Best-effort inference of [com.podcastplayer.app.domain.model.MediaType] from a
+     * media URI, used when restoring a session or reconstructing an Episode from the
+     * MediaController. We check the extension for `file://` URIs and ask the
+     * ContentResolver for `content://` URIs (e.g. MediaStore-published downloads,
+     * which don't carry a visible extension). Defaults to AUDIO.
      */
     private fun inferMediaType(uri: String): com.podcastplayer.app.domain.model.MediaType {
+        if (uri.startsWith("content://")) {
+            val mime = try {
+                context.contentResolver.getType(Uri.parse(uri))
+            } catch (_: Throwable) {
+                null
+            }
+            if (mime?.startsWith("video/") == true) {
+                return com.podcastplayer.app.domain.model.MediaType.VIDEO
+            }
+            if (mime?.startsWith("audio/") == true) {
+                return com.podcastplayer.app.domain.model.MediaType.AUDIO
+            }
+            // Fall through to extension sniffing if MIME isn't available.
+        }
         val ext = uri.substringAfterLast('.', "").substringBefore('?').lowercase()
         val videoExts = setOf("mp4", "webm", "mkv", "mov", "avi", "m4v")
         return if (ext in videoExts) {

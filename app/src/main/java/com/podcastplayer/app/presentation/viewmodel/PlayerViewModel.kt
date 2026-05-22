@@ -199,7 +199,17 @@ class PlayerViewModel(
     }
 
     private suspend fun refreshFromController() {
-        val episode = playerController.getCurrentEpisode()
+        val rebuilt = playerController.getCurrentEpisode()
+        // The controller reconstructs Episode from MediaItem URI, where mediaType
+        // has to be inferred. If we already had the same episode tracked here
+        // (set by playEpisode / queue listener), preserve its mediaType so the
+        // periodic refresh can't downgrade a known-video back to audio.
+        val prev = _currentEpisode.value
+        val episode = when {
+            rebuilt == null -> null
+            prev != null && rebuilt.id == prev.id -> rebuilt.copy(mediaType = prev.mediaType)
+            else -> rebuilt
+        }
         _currentEpisode.value = episode
         _currentArtworkUrl.value = playerController.getCurrentArtworkUrl() ?: episode?.imageUrl
         _hasPrevious.value = playerController.hasPrevious()
