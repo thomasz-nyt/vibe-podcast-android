@@ -90,6 +90,9 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     kapt("androidx.room:room-compiler:2.6.1")
 
+    // WorkManager — used by auto-download (periodic feed refresh + new-episode downloads).
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     implementation("io.coil-kt:coil-compose:2.5.0")
 
     // youtubedl-android — yt-dlp wrapper for on-device YouTube/X/etc. extraction.

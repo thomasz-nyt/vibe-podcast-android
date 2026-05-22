@@ -6,9 +6,12 @@ import android.net.Uri
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.podcastplayer.app.data.local.DatabaseProvider
 import java.io.File
 import java.util.concurrent.Executors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.guava.await
+import kotlinx.coroutines.withContext
 
 class PlayerController private constructor(private val context: Context) {
 
@@ -22,6 +25,9 @@ class PlayerController private constructor(private val context: Context) {
 
     private val executor = Executors.newSingleThreadExecutor()
     private val playbackSessionStorage = PlaybackSessionStorage(context)
+    private val playbackProgressDao by lazy {
+        DatabaseProvider.getDatabase(context).playbackProgressDao()
+    }
 
     private fun episodeToMediaItem(
         episode: com.podcastplayer.app.domain.model.Episode,
@@ -34,9 +40,8 @@ class PlayerController private constructor(private val context: Context) {
             .setArtworkUri(artworkUrl?.let { android.net.Uri.parse(it) })
             .build()
 
-        val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let {
-            Uri.fromFile(File(it))
-        } ?: Uri.parse(episode.audioUrl)
+        val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let { resolveLocalUri(it) }
+            ?: Uri.parse(episode.audioUrl)
 
         return androidx.media3.common.MediaItem.Builder()
             .setMediaId(episode.id)
@@ -45,18 +50,30 @@ class PlayerController private constructor(private val context: Context) {
             .build()
     }
 
-    suspend fun playEpisode(episode: com.podcastplayer.app.domain.model.Episode, artworkUrl: String?) {
+    /**
+     * Saved listen-position for [episodeId], or null if the user hasn't started it
+     * or already finished it. Looked up before `prepare()` so resume is baked into
+     * the MediaItem rather than racing the player's STATE_READY callback.
+     */
+    private suspend fun resumePositionFor(episodeId: String): Long? = withContext(Dispatchers.IO) {
+        val saved = playbackProgressDao.getByEpisodeId(episodeId) ?: return@withContext null
+        if (saved.completed || saved.positionMs <= 0L) null else saved.positionMs
+    }
+
+    suspend fun playEpisode(episode: com.podcastplayer.app.domain.model.Episode, artworkUrl: String?): Long {
         val controller = controllerFuture.await()
-        controller.setMediaItem(episodeToMediaItem(episode, artworkUrl))
+        val startMs = resumePositionFor(episode.id) ?: 0L
+        controller.setMediaItem(episodeToMediaItem(episode, artworkUrl), startMs)
         controller.prepare()
         controller.play()
+        return startMs
     }
 
     suspend fun playEpisodes(
         episodes: List<com.podcastplayer.app.domain.model.Episode>,
         defaultArtworkUrl: String?
-    ) {
-        if (episodes.isEmpty()) return
+    ): Long {
+        if (episodes.isEmpty()) return 0L
 
         val controller = controllerFuture.await()
         val items = episodes.map { episode ->
@@ -66,9 +83,13 @@ class PlayerController private constructor(private val context: Context) {
             )
         }
 
-        controller.setMediaItems(items)
+        val firstEpisodeId = episodes.first().id
+        val startMs = resumePositionFor(firstEpisodeId) ?: 0L
+
+        controller.setMediaItems(items, /* startIndex= */ 0, /* startPositionMs= */ startMs)
         controller.prepare()
         controller.play()
+        return startMs
     }
 
     suspend fun play() {
@@ -150,7 +171,7 @@ class PlayerController private constructor(private val context: Context) {
     suspend fun getCurrentEpisode(): com.podcastplayer.app.domain.model.Episode? {
         val item = controllerFuture.await().currentMediaItem ?: return null
         val uri = item.localConfiguration?.uri?.toString().orEmpty()
-        val isLocal = uri.startsWith("file://")
+        val isLocal = uri.startsWith("file://") || uri.startsWith("content://")
         return com.podcastplayer.app.domain.model.Episode(
             id = item.mediaId,
             podcastId = item.mediaMetadata.artist?.toString().orEmpty(),
@@ -161,10 +182,16 @@ class PlayerController private constructor(private val context: Context) {
             duration = null,
             imageUrl = item.mediaMetadata.artworkUri?.toString(),
             isDownloaded = isLocal,
-            localPath = if (isLocal) item.localConfiguration?.uri?.path else null,
+            localPath = if (isLocal) {
+                if (uri.startsWith("content://")) uri else item.localConfiguration?.uri?.path
+            } else null,
             mediaType = inferMediaType(uri),
         )
     }
+
+    /** Build a media URI from a stored path — handles file paths AND content:// URIs. */
+    private fun resolveLocalUri(localPath: String): Uri =
+        if (localPath.startsWith("content://")) Uri.parse(localPath) else Uri.fromFile(File(localPath))
 
     /**
      * Best-effort inference of [com.podcastplayer.app.domain.model.MediaType] from a file

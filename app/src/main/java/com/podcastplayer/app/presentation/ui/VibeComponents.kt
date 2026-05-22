@@ -22,7 +22,17 @@ import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material.icons.outlined.HistoryToggleOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -258,6 +268,65 @@ fun VibeEmptyState(
             action()
         }
     }
+}
+
+/**
+ * Transient banner shown at the top of the player when a session resumed from a
+ * saved position. Auto-dismisses after ~3s. Stays a no-op until [positionMs] is
+ * non-null so the surrounding layout doesn't shift on every open of the screen.
+ */
+@Composable
+fun ResumeNotice(
+    positionMs: Long?,
+    onConsume: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val visible = positionMs != null && positionMs > 5_000L
+    LaunchedEffect(positionMs) {
+        if (positionMs != null) {
+            kotlinx.coroutines.delay(3_000)
+            onConsume()
+        }
+    }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+        exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+        modifier = modifier,
+    ) {
+        val statusPad = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val colors = MaterialTheme.colorScheme
+        Row(
+            modifier = Modifier
+                .padding(top = statusPad + 8.dp, start = 16.dp, end = 16.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.primaryContainer)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.HistoryToggleOff,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Resumed at ${formatResumeTime(positionMs ?: 0L)}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.onPrimaryContainer,
+            )
+        }
+    }
+}
+
+private fun formatResumeTime(ms: Long): String {
+    val totalSec = (ms / 1000L).coerceAtLeast(0L)
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 /** Eyebrow label used to section content (e.g. "SUBSCRIPTIONS", "LATEST"). */

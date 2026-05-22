@@ -15,6 +15,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -435,6 +436,9 @@ fun PodcastNavHost(
                             }
                         },
                         onDismissPlayer = { playerViewModel.clearPlayer() },
+                        onToggleAutoDownload = { id, enabled ->
+                            podcastViewModel.setQueueAutoDownload(id, enabled)
+                        },
                         onBack = {
                             navController.popBackStack(route = Routes.Home, inclusive = false)
                         }
@@ -443,18 +447,69 @@ fun PodcastNavHost(
 
                 composable(Routes.Downloads) {
                     val scope = rememberCoroutineScope()
-                    val downloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
+                    val podcastDownloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
+                    val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
+
+                    val urlRepository = remember(context) {
+                        com.podcastplayer.app.data.repository.UrlDownloadRepository(context)
+                    }
+
+                    val entries = remember(podcastDownloads, urlDownloads) {
+                        buildList {
+                            podcastDownloads.forEach { item ->
+                                add(
+                                    DownloadEntryUi(
+                                        id = "podcast:${item.episode.id}",
+                                        kind = DownloadEntryUi.Kind.PODCAST,
+                                        title = item.episode.title,
+                                        subtitle = item.podcastTitle,
+                                        artworkUrl = item.episode.imageUrl ?: item.podcastArtworkUrl,
+                                        episode = item.episode,
+                                    ),
+                                )
+                            }
+                            urlDownloads.forEach { entity ->
+                                val episode = urlRepository.toEpisode(entity) ?: return@forEach
+                                add(
+                                    DownloadEntryUi(
+                                        id = "url:${entity.id}",
+                                        kind = if (entity.mediaType == "video")
+                                            DownloadEntryUi.Kind.URL_VIDEO
+                                        else DownloadEntryUi.Kind.URL_AUDIO,
+                                        title = entity.title,
+                                        subtitle = entity.uploader ?: entity.source.uppercase(),
+                                        artworkUrl = entity.thumbnailUrl,
+                                        episode = episode,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
                     DownloadsScreen(
-                        downloads = downloads,
-                        onPlayEpisode = { item ->
-                            playerViewModel.playEpisode(item.episode, item.podcastArtworkUrl)
+                        entries = entries,
+                        onPlay = { entry ->
+                            playerViewModel.playEpisode(entry.episode, entry.artworkUrl)
                             navController.navigate(Routes.Player)
                         },
-                        onDeleteEpisode = { episodeId ->
-                            scope.launch { podcastViewModel.deleteDownload(episodeId) }
+                        onDelete = { entry ->
+                            scope.launch {
+                                when (entry.kind) {
+                                    DownloadEntryUi.Kind.PODCAST ->
+                                        podcastViewModel.deleteDownload(entry.episode.id)
+                                    DownloadEntryUi.Kind.URL_AUDIO,
+                                    DownloadEntryUi.Kind.URL_VIDEO -> {
+                                        // entry.id format: "url:<entity-id>"
+                                        urlDownloadViewModel.deleteDownload(entry.id.removePrefix("url:"))
+                                    }
+                                }
+                            }
                         },
                         onDeleteAll = {
-                            scope.launch { podcastViewModel.deleteAllDownloads() }
+                            scope.launch {
+                                podcastViewModel.deleteAllDownloads()
+                                urlDownloads.forEach { urlDownloadViewModel.deleteDownload(it.id) }
+                            }
                         },
                         onBack = { navController.popBackStack(route = Routes.Home, inclusive = false) }
                     )
@@ -468,6 +523,7 @@ fun PodcastNavHost(
                     val hasPrevious by playerViewModel.hasPrevious.collectAsState()
                     val hasNext by playerViewModel.hasNext.collectAsState()
                     val selectedPodcast by podcastViewModel.selectedPodcast.collectAsState()
+                    val resumedFromMs by playerViewModel.resumedFromMs.collectAsState()
 
                     fun goToEpisodesOrSearch() {
                         val podcastId = selectedPodcast?.id
@@ -486,23 +542,30 @@ fun PodcastNavHost(
                     }
 
                     currentEpisode?.let { episode ->
-                        PlayerScreen(
-                            episode = episode,
-                            playerState = playerState,
-                            artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
-                            sleepTimerRemaining = sleepTimerRemaining,
-                            hasPrevious = hasPrevious,
-                            hasNext = hasNext,
-                            onPlayPause = { playerViewModel.togglePlayPause() },
-                            onPlayPrevious = { playerViewModel.playPrevious() },
-                            onPlayNext = { playerViewModel.playNext() },
-                            onSeek = { playerViewModel.seekTo(it) },
-                            onSpeedChange = { playerViewModel.setPlaybackSpeed(it) },
-                            onSetSleepTimer = { playerViewModel.setSleepTimer(it) },
-                            onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
-                            onDismiss = { goToEpisodesOrSearch() },
-                            isLandscape = isLandscape,
-                        )
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            PlayerScreen(
+                                episode = episode,
+                                playerState = playerState,
+                                artworkUrl = currentArtworkUrl ?: selectedPodcast?.artworkUrl,
+                                sleepTimerRemaining = sleepTimerRemaining,
+                                hasPrevious = hasPrevious,
+                                hasNext = hasNext,
+                                onPlayPause = { playerViewModel.togglePlayPause() },
+                                onPlayPrevious = { playerViewModel.playPrevious() },
+                                onPlayNext = { playerViewModel.playNext() },
+                                onSeek = { playerViewModel.seekTo(it) },
+                                onSpeedChange = { playerViewModel.setPlaybackSpeed(it) },
+                                onSetSleepTimer = { playerViewModel.setSleepTimer(it) },
+                                onCancelSleepTimer = { playerViewModel.cancelSleepTimer() },
+                                onDismiss = { goToEpisodesOrSearch() },
+                                isLandscape = isLandscape,
+                            )
+                            ResumeNotice(
+                                positionMs = resumedFromMs,
+                                onConsume = { playerViewModel.consumeResumeNotice() },
+                                modifier = Modifier.align(Alignment.TopCenter),
+                            )
+                        }
                     }
 
                     if (currentEpisode == null) {

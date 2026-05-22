@@ -28,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class PlayerService : MediaSessionService() {
 
@@ -38,7 +39,6 @@ class PlayerService : MediaSessionService() {
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Main)
     private var persistJob: Job? = null
-    private var pendingSeekToMs: Long? = null
 
     private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(this).playbackProgressDao() }
     private val playbackSessionStorage by lazy { PlaybackSessionStorage(this) }
@@ -69,21 +69,29 @@ class PlayerService : MediaSessionService() {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     val episodeId = mediaItem?.mediaId?.takeIf { it.isNotBlank() } ?: return
 
-                    serviceScope.launch(Dispatchers.IO) {
-                        val saved = playbackProgressDao.getByEpisodeId(episodeId)
-                        pendingSeekToMs = saved?.takeIf { !it.completed }?.positionMs
+                    // Resume position is already baked in when [PlayerController] calls
+                    // setMediaItem(item, startMs), so we only need to seek on auto-advance
+                    // through a queue or when the user pressed skip-next / skip-previous.
+                    val shouldResume = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                        reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK
+                    if (shouldResume) {
+                        serviceScope.launch {
+                            val saved = withContext(Dispatchers.IO) {
+                                playbackProgressDao.getByEpisodeId(episodeId)
+                            }
+                            val resumeMs = saved
+                                ?.takeIf { !it.completed && it.positionMs > 0L }
+                                ?.positionMs
+                            // User may have skipped during IO — only seek if still on this item.
+                            if (resumeMs != null && player?.currentMediaItem?.mediaId == episodeId) {
+                                player?.seekTo(resumeMs)
+                            }
+                        }
                     }
                     persistPlaybackSession(isCompleted = false)
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_READY) {
-                        val seek = pendingSeekToMs
-                        if (seek != null && seek > 0) {
-                            pendingSeekToMs = null
-                            player?.seekTo(seek)
-                        }
-                    }
                     if (playbackState == Player.STATE_ENDED) {
                         persistProgress(markCompleted = true)
                         persistPlaybackSession(isCompleted = true)
@@ -259,7 +267,7 @@ class PlayerService : MediaSessionService() {
             .build()
 
         val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let {
-            Uri.fromFile(File(it))
+            if (it.startsWith("content://")) Uri.parse(it) else Uri.fromFile(File(it))
         } ?: Uri.parse(episode.audioUrl)
         val mediaItem = MediaItem.Builder()
             .setMediaId(episode.id)

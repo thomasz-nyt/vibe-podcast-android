@@ -64,7 +64,7 @@ class PodcastViewModel(
     val selectedQueueId: StateFlow<String?> = _selectedQueueId.asStateFlow()
 
     val queues: StateFlow<List<PodcastQueue>> = queueStorage.queues
-        .map { list -> list.map { PodcastQueue(it.id, it.name, it.createdAt) } }
+        .map { list -> list.map { PodcastQueue(it.id, it.name, it.createdAt, it.autoDownload) } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val selectedQueuePodcasts: StateFlow<List<Podcast>> = combine(
@@ -269,6 +269,14 @@ class PodcastViewModel(
 
     fun removeSavedPodcast(podcastId: String) {
         viewModelScope.launch { savedPodcastsStorage.remove(podcastId) }
+    }
+
+    fun setPodcastAutoDownload(podcastId: String, enabled: Boolean) {
+        viewModelScope.launch { savedPodcastsStorage.setAutoDownload(podcastId, enabled) }
+    }
+
+    fun setQueueAutoDownload(queueId: String, enabled: Boolean) {
+        viewModelScope.launch { queueStorage.setAutoDownload(queueId, enabled) }
     }
 
     fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {

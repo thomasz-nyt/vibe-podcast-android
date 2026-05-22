@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -92,6 +93,13 @@ fun EpisodeListScreen(
     val currentEpisode by playerViewModel.currentEpisode.collectAsState()
     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
     val playerState by playerViewModel.playerState.collectAsState()
+    val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+    val isSubscribed = remember(savedPodcasts, podcast?.id) {
+        savedPodcasts.any { it.id == podcast?.id }
+    }
+    val autoDownload = remember(savedPodcasts, podcast?.id) {
+        savedPodcasts.firstOrNull { it.id == podcast?.id }?.autoDownload == true
+    }
     val scope = rememberCoroutineScope()
 
     if (isLandscape) {
@@ -128,6 +136,31 @@ fun EpisodeListScreen(
                     eyebrow = podcast?.artist,
                     onBack = onBack,
                 )
+
+                if (isSubscribed && podcast != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        VibeChip(
+                            label = if (autoDownload) "Auto-download on" else "Auto-download new",
+                            active = autoDownload,
+                            onClick = {
+                                podcastViewModel.setPodcastAutoDownload(podcast.id, !autoDownload)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Outlined.CloudDownload,
+                                    contentDescription = null,
+                                    tint = if (autoDownload) colors.primary else colors.onSurface,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            },
+                        )
+                    }
+                }
 
                 Box(modifier = Modifier.weight(1f)) {
                     when (val state = episodesState) {
@@ -367,6 +400,25 @@ private fun EpisodeListLandscape(
                         color = if (subscribed) colors.onSurface else colors.onPrimary,
                     )
                 }
+            }
+
+            if (subscribed && podcast != null) {
+                val savedPodcasts by podcastViewModel.savedPodcasts.collectAsState()
+                val autoDownload = savedPodcasts.firstOrNull { it.id == podcast.id }?.autoDownload == true
+                VibeChip(
+                    label = if (autoDownload) "Auto-download on" else "Auto-download new",
+                    active = autoDownload,
+                    onClick = { podcastViewModel.setPodcastAutoDownload(podcast.id, !autoDownload) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudDownload,
+                            contentDescription = null,
+                            tint = if (autoDownload) colors.primary else colors.onSurface,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
 
