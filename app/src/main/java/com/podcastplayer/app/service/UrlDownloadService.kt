@@ -14,8 +14,10 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.PodcastApplication
+import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.data.repository.UrlDownloadStatus
+import com.podcastplayer.app.domain.model.MediaType
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -145,13 +147,24 @@ class UrlDownloadService : Service() {
                 return
             }
 
-            // Move into a flat name to keep paths predictable across reboots.
-            val finalFile = File(outDir, "${id}.${produced.extension}")
-            if (finalFile.exists()) finalFile.delete()
-            val moved = produced.renameTo(finalFile)
-            val output = if (moved) finalFile else produced
+            // Try to publish to MediaStore (Android 10+) so VLC, Files, and the
+            // Gallery can discover the file. Falls back to app-private storage on
+            // older devices.
+            val mediaType = MediaType.fromTag(entity.mediaType)
+            val displayName = buildDisplayName(entity.title, entity.uploader, produced.extension)
+            val saved = publishToMediaStore(produced, mediaType, displayName)
 
-            repository.markCompleted(id, output)
+            if (saved != null) {
+                repository.markCompleted(id, saved.uri.toString(), saved.sizeBytes)
+                produced.delete()
+            } else {
+                // Move into a flat name to keep paths predictable across reboots.
+                val finalFile = File(outDir, "${id}.${produced.extension}")
+                if (finalFile.exists()) finalFile.delete()
+                val moved = produced.renameTo(finalFile)
+                val output = if (moved) finalFile else produced
+                repository.markCompleted(id, output.absolutePath, output.length())
+            }
             // Best-effort cleanup of leftover sidecar files.
             workdir.listFiles()?.forEach { it.delete() }
             workdir.delete()
@@ -168,6 +181,59 @@ class UrlDownloadService : Service() {
             activeJobs.remove(id)
             processIds.remove(id)
         }
+    }
+
+    /**
+     * Publish [produced] into MediaStore (audio or video). Returns null on API < 29
+     * or if MediaStore write fails, so the caller can fall back to a local file.
+     */
+    private fun publishToMediaStore(
+        produced: File,
+        mediaType: MediaType,
+        displayName: String,
+    ): MediaStoreSaver.SavedMedia? {
+        if (!MediaStoreSaver.isSupported()) return null
+        val ext = produced.extension.lowercase()
+        return when (mediaType) {
+            MediaType.AUDIO -> {
+                val mime = when (ext) {
+                    "mp3" -> "audio/mpeg"
+                    "m4a", "aac" -> "audio/mp4"
+                    "ogg", "oga" -> "audio/ogg"
+                    "opus" -> "audio/opus"
+                    "wav" -> "audio/wav"
+                    else -> "audio/mpeg"
+                }
+                MediaStoreSaver.saveAudioFromFile(applicationContext, displayName, mime, produced)
+            }
+            MediaType.VIDEO -> {
+                val mime = when (ext) {
+                    "mp4", "m4v" -> "video/mp4"
+                    "webm" -> "video/webm"
+                    "mkv" -> "video/x-matroska"
+                    else -> "video/mp4"
+                }
+                MediaStoreSaver.saveVideoFromFile(applicationContext, displayName, mime, produced)
+            }
+        }
+    }
+
+    /**
+     * Display name written to MediaStore. Prefixes the uploader (channel / poster)
+     * when available so files browsed from VLC / Gallery read e.g.
+     * "Lex Fridman - Joe Rogan #1.mp4" rather than just the bare video title.
+     * Sanitization (illegal chars, length cap) happens inside [MediaStoreSaver].
+     */
+    private fun buildDisplayName(title: String, uploader: String?, extension: String): String {
+        val rawTitle = title.trim()
+        val rawUploader = uploader?.trim()?.removePrefix("@")?.trim()
+        val base = when {
+            rawUploader.isNullOrBlank() && rawTitle.isBlank() -> "vibe-clip"
+            rawUploader.isNullOrBlank() -> rawTitle
+            rawTitle.isBlank() -> rawUploader
+            else -> "$rawUploader - $rawTitle"
+        }
+        return "$base.${extension.ifBlank { "mp4" }}"
     }
 
     private fun pickProducedFile(dir: File): File? {

@@ -2,6 +2,7 @@ package com.podcastplayer.app
 
 import android.app.Application
 import android.util.Log
+import com.podcastplayer.app.service.AutoDownloadWorker
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -36,6 +37,8 @@ class PodcastApplication : Application() {
             // Fire-and-forget update; safe to skip if it fails.
             tryUpdateYoutubeDl()
         }
+
+        AutoDownloadWorker.enqueuePeriodic(this)
     }
 
     private fun initYoutubeDl() {

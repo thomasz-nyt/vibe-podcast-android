@@ -3,6 +3,7 @@ package com.podcastplayer.app.data.repository
 import android.content.Context
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.UrlDownloadDao
 import com.podcastplayer.app.data.local.UrlDownloadEntity
 import com.podcastplayer.app.domain.model.Episode
@@ -144,12 +145,12 @@ class UrlDownloadRepository(private val context: Context) {
         dao.markFailed(id, UrlDownloadStatus.CANCELED.name, null)
     }
 
-    suspend fun markCompleted(id: String, file: File) {
+    suspend fun markCompleted(id: String, localPath: String, fileSize: Long) {
         dao.markCompleted(
             id = id,
             status = UrlDownloadStatus.COMPLETED.name,
-            localPath = file.absolutePath,
-            fileSize = if (file.exists()) file.length() else 0L,
+            localPath = localPath,
+            fileSize = fileSize,
             completedAtMs = System.currentTimeMillis(),
         )
     }
@@ -159,8 +160,10 @@ class UrlDownloadRepository(private val context: Context) {
         try {
             val entity = dao.getById(id)
             entity?.localPath?.let { path ->
-                val file = File(path)
-                if (file.exists()) file.delete()
+                if (!MediaStoreSaver.deleteByUri(context, path)) {
+                    val file = File(path)
+                    if (file.exists()) file.delete()
+                }
             }
             dao.deleteById(id)
             Result.success(Unit)

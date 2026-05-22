@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.QueueMusic
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -77,6 +78,7 @@ fun QueueScreen(
     onRemove: (String) -> Unit,
     onPlayQueue: () -> Unit,
     onDismissPlayer: () -> Unit,
+    onToggleAutoDownload: (String, Boolean) -> Unit = { _, _ -> },
     @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -132,6 +134,30 @@ fun QueueScreen(
                 onPlayQueue = onPlayQueue,
                 enabled = podcasts.isNotEmpty(),
             )
+
+            if (selectedQueue != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    VibeChip(
+                        label = if (selectedQueue.autoDownload) "Auto-download on" else "Auto-download new",
+                        active = selectedQueue.autoDownload,
+                        onClick = { onToggleAutoDownload(selectedQueue.id, !selectedQueue.autoDownload) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.CloudDownload,
+                                contentDescription = null,
+                                tint = if (selectedQueue.autoDownload) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        },
+                    )
+                }
+            }
 
             if (podcasts.isEmpty()) {
                 Box(

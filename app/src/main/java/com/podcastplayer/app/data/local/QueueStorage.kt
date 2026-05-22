@@ -16,7 +16,8 @@ class QueueStorage(context: Context) {
         val id: String,
         val name: String,
         val createdAt: Long,
-        val podcastIds: List<String>
+        val podcastIds: List<String>,
+        val autoDownload: Boolean = false,
     )
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -101,6 +102,13 @@ class QueueStorage(context: Context) {
             } else {
                 queue
             }
+        }
+        persist(updated)
+    }
+
+    suspend fun setAutoDownload(queueId: String, enabled: Boolean) = mutex.withLock {
+        val updated = _queues.value.map { queue ->
+            if (queue.id == queueId) queue.copy(autoDownload = enabled) else queue
         }
         persist(updated)
     }

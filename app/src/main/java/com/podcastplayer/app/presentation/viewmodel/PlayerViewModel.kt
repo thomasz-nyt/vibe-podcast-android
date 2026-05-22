@@ -39,6 +39,14 @@ class PlayerViewModel(
     private val _hasNext = MutableStateFlow(false)
     val hasNext: StateFlow<Boolean> = _hasNext.asStateFlow()
 
+    /**
+     * Fires once after each manual playback start that resumed at a saved position.
+     * The UI consumes the value to show a "Resumed at MM:SS" snackbar/toast, then
+     * sets it back to null. Auto-advance through a queue does not raise this.
+     */
+    private val _resumedFromMs = MutableStateFlow<Long?>(null)
+    val resumedFromMs: StateFlow<Long?> = _resumedFromMs.asStateFlow()
+
     private var sleepTimerJob: Job? = null
 
     private var queueEpisodes: Map<String, Episode> = emptyMap()
@@ -70,10 +78,11 @@ class PlayerViewModel(
                 currentEpisode = episode
             )
             try {
-                playerController.playEpisode(episode, artworkUrl)
+                val startMs = playerController.playEpisode(episode, artworkUrl)
                 _playerState.value = _playerState.value.copy(
                     state = PlaybackState.PLAYING
                 )
+                if (startMs > 0L) _resumedFromMs.value = startMs
                 refreshFromController()
             } catch (e: Exception) {
                 _playerState.value = _playerState.value.copy(
@@ -98,13 +107,18 @@ class PlayerViewModel(
             )
 
             try {
-                playerController.playEpisodes(episodes, defaultArtworkUrl)
+                val startMs = playerController.playEpisodes(episodes, defaultArtworkUrl)
                 _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
+                if (startMs > 0L) _resumedFromMs.value = startMs
                 refreshFromController()
             } catch (e: Exception) {
                 _playerState.value = _playerState.value.copy(state = PlaybackState.ERROR)
             }
         }
+    }
+
+    fun consumeResumeNotice() {
+        _resumedFromMs.value = null
     }
 
     fun togglePlayPause() {
@@ -185,7 +199,17 @@ class PlayerViewModel(
     }
 
     private suspend fun refreshFromController() {
-        val episode = playerController.getCurrentEpisode()
+        val rebuilt = playerController.getCurrentEpisode()
+        // The controller reconstructs Episode from MediaItem URI, where mediaType
+        // has to be inferred. If we already had the same episode tracked here
+        // (set by playEpisode / queue listener), preserve its mediaType so the
+        // periodic refresh can't downgrade a known-video back to audio.
+        val prev = _currentEpisode.value
+        val episode = when {
+            rebuilt == null -> null
+            prev != null && rebuilt.id == prev.id -> rebuilt.copy(mediaType = prev.mediaType)
+            else -> rebuilt
+        }
         _currentEpisode.value = episode
         _currentArtworkUrl.value = playerController.getCurrentArtworkUrl() ?: episode?.imageUrl
         _hasPrevious.value = playerController.hasPrevious()

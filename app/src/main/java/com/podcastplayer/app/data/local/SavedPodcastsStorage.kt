@@ -41,6 +41,15 @@ class SavedPodcastsStorage(context: Context) {
         }
     }
 
+    suspend fun setAutoDownload(podcastId: String, enabled: Boolean) {
+        mutex.withLock {
+            val updated = _savedPodcasts.value.map { podcast ->
+                if (podcast.id == podcastId) podcast.copy(autoDownload = enabled) else podcast
+            }
+            persist(updated)
+        }
+    }
+
     suspend fun move(fromIndex: Int, toIndex: Int) {
         mutex.withLock {
             val list = _savedPodcasts.value.toMutableList()

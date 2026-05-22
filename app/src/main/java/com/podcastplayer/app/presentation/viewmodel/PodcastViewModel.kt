@@ -64,7 +64,7 @@ class PodcastViewModel(
     val selectedQueueId: StateFlow<String?> = _selectedQueueId.asStateFlow()
 
     val queues: StateFlow<List<PodcastQueue>> = queueStorage.queues
-        .map { list -> list.map { PodcastQueue(it.id, it.name, it.createdAt) } }
+        .map { list -> list.map { PodcastQueue(it.id, it.name, it.createdAt, it.autoDownload) } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val selectedQueuePodcasts: StateFlow<List<Podcast>> = combine(
@@ -238,8 +238,12 @@ class PodcastViewModel(
     fun startDownload(episode: Episode) {
         if (_downloadProgress.value.containsKey(episode.id)) return
         _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
+        // Surface the podcast title to DownloadManager so the MediaStore display
+        // name reads as "<podcast> - <episode>.mp3" when browsed from VLC / Files.
+        val podcastTitle = _savedPodcasts.value.firstOrNull { it.id == episode.podcastId }?.title
+            ?: _selectedPodcast.value?.takeIf { it.id == episode.podcastId }?.title
         viewModelScope.launch {
-            val result = downloadManager.downloadEpisode(episode) { progress ->
+            val result = downloadManager.downloadEpisode(episode, podcastTitle) { progress ->
                 _downloadProgress.value = _downloadProgress.value + (episode.id to progress)
             }
             _downloadProgress.value = _downloadProgress.value - episode.id
@@ -269,6 +273,14 @@ class PodcastViewModel(
 
     fun removeSavedPodcast(podcastId: String) {
         viewModelScope.launch { savedPodcastsStorage.remove(podcastId) }
+    }
+
+    fun setPodcastAutoDownload(podcastId: String, enabled: Boolean) {
+        viewModelScope.launch { savedPodcastsStorage.setAutoDownload(podcastId, enabled) }
+    }
+
+    fun setQueueAutoDownload(queueId: String, enabled: Boolean) {
+        viewModelScope.launch { queueStorage.setAutoDownload(queueId, enabled) }
     }
 
     fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {
