@@ -34,10 +34,16 @@ class DownloadManager(private val context: Context) {
 
     suspend fun downloadEpisode(
         episode: Episode,
+        podcastTitle: String? = null,
         onProgress: (Float) -> Unit = {}
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val fileName = buildSafeFileName(episode)
+            // Path-on-disk name still uses a hash for the legacy app-private path
+            // (deterministic, collision-free, FS-safe). The MediaStore display name
+            // is built from the human-readable title so users browsing in VLC /
+            // Files see context, not a hex string.
+            val legacyFileName = buildHashedFileName(episode)
+            val displayName = buildDisplayName(episode, podcastTitle)
 
             // Don't re-download an episode we've already saved. We key on the DB
             // row rather than file existence because the path may be a content://
@@ -48,7 +54,7 @@ class DownloadManager(private val context: Context) {
             }
 
             if (MediaStoreSaver.isSupported()) {
-                val saved = downloadIntoMediaStore(episode, fileName, onProgress)
+                val saved = downloadIntoMediaStore(episode, displayName, onProgress)
                     ?: return@withContext Result.failure(
                         java.io.IOException("Could not save audio to MediaStore"),
                     )
@@ -59,7 +65,7 @@ class DownloadManager(private val context: Context) {
                 // Pre-Q: fall back to app-private external dir (existing behavior).
                 // Files won't be visible to other apps, but neither would they without
                 // the legacy WRITE_EXTERNAL_STORAGE permission flow.
-                val localFile = File(downloadDir, fileName)
+                val localFile = File(downloadDir, legacyFileName)
                 if (localFile.exists()) return@withContext Result.success(localFile.absolutePath)
                 downloadIntoFile(episode, localFile, onProgress)
                 val entity = episode.toEntity(
@@ -241,13 +247,31 @@ class DownloadManager(private val context: Context) {
         return dao.getEpisodeById(episodeId)
     }
 
-    private fun buildSafeFileName(episode: Episode): String {
+    private fun buildHashedFileName(episode: Episode): String {
         val source = episode.id.takeIf { it.isNotBlank() } ?: episode.audioUrl
         val extension = guessExtension(episode.audioUrl) ?: "mp3"
         val hash = MessageDigest.getInstance("MD5")
             .digest(source.toByteArray())
             .joinToString("") { "%02x".format(it) }
         return "$hash.$extension"
+    }
+
+    /**
+     * Human-readable display name for the MediaStore row, so users see e.g.
+     * "Lex Fridman - Joe Rogan Interview.mp3" instead of a hex hash when they
+     * browse the Podcasts folder from another app. Sanitization (illegal chars,
+     * length cap) happens in [MediaStoreSaver].
+     */
+    private fun buildDisplayName(episode: Episode, podcastTitle: String?): String {
+        val extension = guessExtension(episode.audioUrl) ?: "mp3"
+        val rawTitle = episode.title.trim()
+        val base = when {
+            podcastTitle.isNullOrBlank() && rawTitle.isBlank() -> "episode"
+            podcastTitle.isNullOrBlank() -> rawTitle
+            rawTitle.isBlank() -> podcastTitle
+            else -> "$podcastTitle - $rawTitle"
+        }
+        return "$base.$extension"
     }
 
     private fun guessExtension(url: String): String? {

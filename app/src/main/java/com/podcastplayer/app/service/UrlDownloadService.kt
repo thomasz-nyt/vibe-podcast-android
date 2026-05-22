@@ -151,7 +151,7 @@ class UrlDownloadService : Service() {
             // Gallery can discover the file. Falls back to app-private storage on
             // older devices.
             val mediaType = MediaType.fromTag(entity.mediaType)
-            val displayName = buildDisplayName(entity.title, produced.extension)
+            val displayName = buildDisplayName(entity.title, entity.uploader, produced.extension)
             val saved = publishToMediaStore(produced, mediaType, displayName)
 
             if (saved != null) {
@@ -218,10 +218,21 @@ class UrlDownloadService : Service() {
         }
     }
 
-    /** Sanitize + append the source extension. Caps length so MediaStore is happy. */
-    private fun buildDisplayName(title: String, extension: String): String {
-        val safe = title.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(80)
-        val base = if (safe.isBlank()) "vibe-clip" else safe
+    /**
+     * Display name written to MediaStore. Prefixes the uploader (channel / poster)
+     * when available so files browsed from VLC / Gallery read e.g.
+     * "Lex Fridman - Joe Rogan #1.mp4" rather than just the bare video title.
+     * Sanitization (illegal chars, length cap) happens inside [MediaStoreSaver].
+     */
+    private fun buildDisplayName(title: String, uploader: String?, extension: String): String {
+        val rawTitle = title.trim()
+        val rawUploader = uploader?.trim()?.removePrefix("@")?.trim()
+        val base = when {
+            rawUploader.isNullOrBlank() && rawTitle.isBlank() -> "vibe-clip"
+            rawUploader.isNullOrBlank() -> rawTitle
+            rawTitle.isBlank() -> rawUploader
+            else -> "$rawUploader - $rawTitle"
+        }
         return "$base.${extension.ifBlank { "mp4" }}"
     }
 

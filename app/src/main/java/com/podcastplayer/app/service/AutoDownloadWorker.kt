@@ -120,7 +120,7 @@ class AutoDownloadWorker(
                     if (downloadedDao.isEpisodeDownloaded(episode.id)) continue
                     val withArtwork = ensureArtwork(episode, podcast)
                     // Result is ignored — periodic work; we'll try again next interval.
-                    downloadManager.downloadEpisode(withArtwork)
+                    downloadManager.downloadEpisode(withArtwork, podcastTitle = podcast.title)
                 }
             }
         }
