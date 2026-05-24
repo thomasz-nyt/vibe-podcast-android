@@ -212,6 +212,10 @@ class DownloadManager(private val context: Context) {
         }
     }
 
+    /** Raw entities, useful when callers need file-size or other metadata that
+     *  the domain [Episode] doesn't carry. */
+    fun getAllDownloadedEntitiesFlow(): Flow<List<DownloadedEpisodeEntity>> = dao.getAllEpisodes()
+
     suspend fun deleteEpisode(episodeId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val episode = dao.getEpisodeById(episodeId)

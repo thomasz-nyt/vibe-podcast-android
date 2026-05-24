@@ -44,6 +44,7 @@ import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.service.PlaybackSessionStorage
 import com.podcastplayer.app.service.PlayerController
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -427,12 +428,21 @@ fun PodcastNavHost(
                     val scope = rememberCoroutineScope()
                     val podcastDownloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
                     val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
+                    // Raw entities give us fileSize, which the UI flows above don't carry.
+                    val podcastEntities by produceState<List<com.podcastplayer.app.data.local.DownloadedEpisodeEntity>>(
+                        initialValue = emptyList(),
+                    ) {
+                        com.podcastplayer.app.data.repository.DownloadManager(context)
+                            .getAllDownloadedEntitiesFlow()
+                            .collect { value = it }
+                    }
 
                     val urlRepository = remember(context) {
                         com.podcastplayer.app.data.repository.UrlDownloadRepository(context)
                     }
 
-                    val entries = remember(podcastDownloads, urlDownloads) {
+                    val entries = remember(podcastDownloads, urlDownloads, podcastEntities) {
+                        val sizeById = podcastEntities.associate { it.id to it.fileSize }
                         buildList {
                             podcastDownloads.forEach { item ->
                                 add(
@@ -443,6 +453,7 @@ fun PodcastNavHost(
                                         subtitle = item.podcastTitle,
                                         artworkUrl = item.episode.imageUrl ?: item.podcastArtworkUrl,
                                         episode = item.episode,
+                                        sizeBytes = sizeById[item.episode.id] ?: 0L,
                                     ),
                                 )
                             }
@@ -458,14 +469,17 @@ fun PodcastNavHost(
                                         subtitle = entity.uploader ?: entity.source.uppercase(),
                                         artworkUrl = entity.thumbnailUrl,
                                         episode = episode,
+                                        sizeBytes = entity.fileSize ?: 0L,
                                     ),
                                 )
                             }
                         }
                     }
+                    val totalBytes = remember(entries) { entries.sumOf { it.sizeBytes } }
 
                     DownloadsScreen(
                         entries = entries,
+                        totalBytes = totalBytes,
                         onPlay = { entry ->
                             playerViewModel.playEpisode(entry.episode, entry.artworkUrl)
                             navController.navigate(Routes.Player)

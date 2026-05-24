@@ -63,25 +63,50 @@ data class DownloadEntryUi(
     val artworkUrl: String?,
     /** Playable Episode — used by the play handler regardless of source. */
     val episode: Episode,
+    /** On-disk byte count for this entry. 0 if unknown. */
+    val sizeBytes: Long = 0L,
 ) {
     enum class Kind { PODCAST, URL_AUDIO, URL_VIDEO }
+}
+
+/** Human-readable byte count: "456 KB", "1.2 GB", etc. Binary (1024-based) units. */
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0L) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    var value = bytes.toDouble()
+    var unit = 0
+    while (value >= 1024.0 && unit < units.lastIndex) {
+        value /= 1024.0
+        unit++
+    }
+    return if (unit == 0 || value >= 100.0) {
+        "%.0f %s".format(value, units[unit])
+    } else {
+        "%.1f %s".format(value, units[unit])
+    }
 }
 
 @Composable
 fun DownloadsScreen(
     entries: List<DownloadEntryUi>,
+    totalBytes: Long,
     onPlay: (DownloadEntryUi) -> Unit,
     onDelete: (DownloadEntryUi) -> Unit,
     onDeleteAll: () -> Unit,
     @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
 ) {
     var showDeleteAllDialog by remember { mutableStateOf(false) }
+    val eyebrow = if (entries.isEmpty()) {
+        "Offline"
+    } else {
+        "Offline · ${entries.size} item${if (entries.size == 1) "" else "s"} · ${formatBytes(totalBytes)}"
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             VibeTopBar(
                 title = "Downloads",
-                eyebrow = "Offline",
+                eyebrow = eyebrow,
                 actions = {
                     if (entries.isNotEmpty()) {
                         VibeChip(
