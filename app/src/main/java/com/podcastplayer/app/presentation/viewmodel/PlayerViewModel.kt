@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
@@ -18,7 +19,8 @@ import kotlinx.coroutines.launch
 
 class PlayerViewModel(
     private val playerController: PlayerController,
-    private val playbackSessionStorage: PlaybackSessionStorage
+    private val playbackSessionStorage: PlaybackSessionStorage,
+    private val appSettings: AppSettings? = null,
 ) : ViewModel() {
 
     private val _playerState = MutableStateFlow(PlayerState())
@@ -79,6 +81,7 @@ class PlayerViewModel(
             )
             try {
                 val startMs = playerController.playEpisode(episode, artworkUrl)
+                applyDefaultSpeedIfNeeded()
                 _playerState.value = _playerState.value.copy(
                     state = PlaybackState.PLAYING
                 )
@@ -90,6 +93,18 @@ class PlayerViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * Apply the user's preferred default playback speed, if a setting was wired in.
+     * Called after each manual play start; auto-advance through a queue keeps the
+     * currently-set speed.
+     */
+    private suspend fun applyDefaultSpeedIfNeeded() {
+        val speed = appSettings?.defaultPlaybackSpeed?.value ?: return
+        if (kotlin.math.abs(speed - 1.0f) < 0.01f) return
+        playerController.setPlaybackSpeed(speed)
+        _playerState.value = _playerState.value.copy(playbackSpeed = speed)
     }
 
     fun playEpisodesQueue(episodes: List<Episode>, defaultArtworkUrl: String?) {
@@ -108,6 +123,7 @@ class PlayerViewModel(
 
             try {
                 val startMs = playerController.playEpisodes(episodes, defaultArtworkUrl)
+                applyDefaultSpeedIfNeeded()
                 _playerState.value = _playerState.value.copy(state = PlaybackState.PLAYING)
                 if (startMs > 0L) _resumedFromMs.value = startMs
                 refreshFromController()

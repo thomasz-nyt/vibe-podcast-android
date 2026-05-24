@@ -7,11 +7,13 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.repository.UrlValidator
 import com.podcastplayer.app.presentation.ui.PodcastNavHost
 import com.podcastplayer.app.ui.theme.PodcastPlayerTheme
@@ -31,8 +33,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingShareUrl = extractSharedUrl(intent)
+        val settings = AppSettings.getInstance(this)
         setContent {
-            PodcastPlayerTheme {
+            val themeMode by settings.themeMode.collectAsState()
+            PodcastPlayerTheme(themeMode = themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
