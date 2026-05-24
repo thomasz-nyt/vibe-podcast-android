@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Used by Auto Backup on API 23-30 (android:fullBackupContent).
+  Skips downloaded media + the player session — those are reproducible and
+  can be very large. Keep the SharedPreferences (subscriptions, queues,
+  auto-download flags) and the Room database (episode metadata + progress).
+-->
+<full-backup-content>
+    <exclude domain="external" path="Podcasts/episodes/" />
+    <exclude domain="file" path="url_downloads/" />
+    <exclude domain="sharedpref" path="player_session.xml" />
+</full-backup-content>

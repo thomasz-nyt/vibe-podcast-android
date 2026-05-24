@@ -34,8 +34,18 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 full mode + resource shrinking. Together these typically cut 30-40%
+            // off the dex/resources for a Compose + Media3 app. Rules live in
+            // proguard-rules.pro; the default-optimize file ships sensible defaults
+            // for AndroidX libraries.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            // Lets debug + release sit side-by-side on the same device.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
     }
 
