@@ -26,6 +26,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.podcastplayer.app.BuildConfig
+import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
@@ -51,6 +53,7 @@ private object Routes {
     const val Queue = "queue"
     const val Downloads = "downloads"
     const val Player = "player"
+    const val Settings = "settings"
 
     const val EpisodesBase = "episodes"
     const val PodcastIdArg = "podcastId"
@@ -78,6 +81,7 @@ fun PodcastNavHost(
     val context = LocalContext.current
     val db = remember { DatabaseProvider.getDatabase(context) }
     val queueStorage = remember { QueueStorage(context) }
+    val appSettings = remember { AppSettings.getInstance(context) }
     val application = context.applicationContext as android.app.Application
 
     // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
@@ -93,7 +97,8 @@ fun PodcastNavHost(
     val playerViewModel: PlayerViewModel = viewModel(
         factory = PlayerViewModelFactory(
             PlayerController.getInstance(context),
-            PlaybackSessionStorage(context)
+            PlaybackSessionStorage(context),
+            appSettings,
         )
     )
     val urlDownloadViewModel: UrlDownloadViewModel = viewModel(
@@ -357,7 +362,8 @@ fun PodcastNavHost(
                         onExportOpml = { exportLauncher.launch("vibe-podcasts.opml") },
                         onImportOpml = {
                             importLauncher.launch(arrayOf("text/x-opml", "text/xml", "application/xml", "*/*"))
-                        }
+                        },
+                        onOpenSettings = { navController.navigate(Routes.Settings) },
                     )
                 }
 
@@ -512,6 +518,29 @@ fun PodcastNavHost(
                             }
                         },
                         onBack = { navController.popBackStack(route = Routes.Home, inclusive = false) }
+                    )
+                }
+
+                composable(Routes.Settings) {
+                    val themeMode by appSettings.themeMode.collectAsState()
+                    val defaultSpeed by appSettings.defaultPlaybackSpeed.collectAsState()
+                    val autoDownloadOnCellular by appSettings.autoDownloadOnCellular.collectAsState()
+
+                    SettingsScreen(
+                        themeMode = themeMode,
+                        defaultPlaybackSpeed = defaultSpeed,
+                        autoDownloadOnCellular = autoDownloadOnCellular,
+                        appVersion = BuildConfig.VERSION_NAME,
+                        onThemeChange = appSettings::setThemeMode,
+                        onPlaybackSpeedChange = appSettings::setDefaultPlaybackSpeed,
+                        onAutoDownloadCellularChange = { enabled ->
+                            appSettings.setAutoDownloadOnCellular(enabled)
+                            // Re-schedule the worker so the new network constraint takes effect.
+                            com.podcastplayer.app.service.AutoDownloadWorker.reschedule(
+                                context, allowCellular = enabled,
+                            )
+                        },
+                        onBack = { navController.popBackStack() },
                     )
                 }
 

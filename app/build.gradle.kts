@@ -50,6 +50,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Generate BuildConfig so we can surface versionName etc. in the UI.
+        buildConfig = true
     }
 
     composeOptions {

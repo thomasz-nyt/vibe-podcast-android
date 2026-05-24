@@ -89,6 +89,7 @@ fun PodcastListScreen(
     onAddFromUrl: (String) -> Unit = {},
     onExportOpml: () -> Unit = {},
     onImportOpml: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     var searchQuery by remember { mutableStateOf("") }
@@ -158,6 +159,10 @@ fun PodcastListScreen(
                                 expanded = overflowOpen,
                                 onDismissRequest = { overflowOpen = false },
                             ) {
+                                DropdownMenuItem(
+                                    text = { Text("Settings") },
+                                    onClick = { overflowOpen = false; onOpenSettings() },
+                                )
                                 DropdownMenuItem(
                                     text = { Text("Export subscriptions") },
                                     onClick = { overflowOpen = false; onExportOpml() },

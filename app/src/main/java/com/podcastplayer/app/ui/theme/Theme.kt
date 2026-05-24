@@ -10,6 +10,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.podcastplayer.app.data.local.ThemeMode
 
 private val VibeDarkColorScheme = darkColorScheme(
     primary = VibeDarkAccent,
@@ -69,9 +70,14 @@ private val VibeLightColorScheme = lightColorScheme(
 
 @Composable
 fun PodcastPlayerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
     content: @Composable () -> Unit
 ) {
+    val darkTheme = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
     val colorScheme = if (darkTheme) VibeDarkColorScheme else VibeLightColorScheme
 
     val view = LocalView.current

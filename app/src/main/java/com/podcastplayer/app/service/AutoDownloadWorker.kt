@@ -8,6 +8,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
@@ -59,12 +60,31 @@ class AutoDownloadWorker(
         /**
          * Schedule the worker on app start. KEEP policy means we don't reset the
          * timer on every cold start — once enrolled, it runs on its own schedule.
+         * Reads the cellular preference from [AppSettings].
          */
         fun enqueuePeriodic(context: Context) {
-            // UNMETERED → Wi-Fi only by default. Auto-download can pull substantial
-            // bandwidth and we'd rather miss a day than burn the user's cellular data.
+            val cellular = AppSettings.getInstance(context).autoDownloadOnCellular.value
+            enqueueInternal(context, cellular, ExistingPeriodicWorkPolicy.KEEP)
+        }
+
+        /**
+         * Force a re-schedule with the given network constraint. Used when the
+         * user flips the "auto-download on cellular" setting so the next run
+         * picks up the new policy.
+         */
+        fun reschedule(context: Context, allowCellular: Boolean) {
+            enqueueInternal(context, allowCellular, ExistingPeriodicWorkPolicy.UPDATE)
+        }
+
+        private fun enqueueInternal(
+            context: Context,
+            allowCellular: Boolean,
+            policy: ExistingPeriodicWorkPolicy,
+        ) {
+            val networkType = if (allowCellular) NetworkType.CONNECTED else NetworkType.UNMETERED
+
             val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.UNMETERED)
+                .setRequiredNetworkType(networkType)
                 .build()
 
             val request = PeriodicWorkRequestBuilder<AutoDownloadWorker>(
@@ -75,7 +95,7 @@ class AutoDownloadWorker(
 
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 UNIQUE_WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                policy,
                 request,
             )
         }
