@@ -127,7 +127,14 @@ fun PodcastListScreen(
         viewModel.clearOpmlResult()
     }
 
+    // Debounce search so we don't hammer the iTunes API on every keystroke.
+    // 300ms feels responsive while skipping intermediate states for fast typing.
     LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) {
+            viewModel.searchPodcasts("")
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(300)
         viewModel.searchPodcasts(searchQuery)
     }
 
