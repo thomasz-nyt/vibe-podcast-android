@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - 'feature/instant-play'
       - 'claude/**'
   pull_request:
@@ -36,6 +37,8 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
+          # Suffix with the short SHA so artifacts from different builds
+          # (e.g. multiple main commits) don't collide in the run list.
+          name: app-debug-apk-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
