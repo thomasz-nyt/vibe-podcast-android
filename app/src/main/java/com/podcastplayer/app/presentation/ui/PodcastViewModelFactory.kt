@@ -6,13 +6,15 @@ import com.podcastplayer.app.data.local.PlaybackProgressDao
 import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.PodcastRepository
+import com.podcastplayer.app.data.repository.UrlDownloadRepository
 
 class PodcastViewModelFactory(
     private val repository: PodcastRepository,
     private val downloadManager: com.podcastplayer.app.data.repository.DownloadManager,
     private val savedPodcastsStorage: SavedPodcastsStorage,
     private val queueStorage: QueueStorage,
-    private val playbackProgressDao: PlaybackProgressDao
+    private val playbackProgressDao: PlaybackProgressDao,
+    private val urlDownloadRepository: UrlDownloadRepository? = null,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -22,7 +24,8 @@ class PodcastViewModelFactory(
                 downloadManager,
                 savedPodcastsStorage,
                 queueStorage,
-                playbackProgressDao
+                playbackProgressDao,
+                urlDownloadRepository,
             ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
