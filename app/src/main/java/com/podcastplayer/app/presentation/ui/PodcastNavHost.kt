@@ -81,13 +81,17 @@ fun PodcastNavHost(
     val application = context.applicationContext as android.app.Application
 
     // Keep ViewModel scoping identical to the previous implementation (created once at the top level).
+    val urlDownloadRepositoryShared = remember {
+        com.podcastplayer.app.data.repository.UrlDownloadRepository(context)
+    }
     val podcastViewModel: PodcastViewModel = viewModel(
         factory = PodcastViewModelFactory(
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
             SavedPodcastsStorage(context),
             queueStorage,
-            db.playbackProgressDao()
+            db.playbackProgressDao(),
+            urlDownloadRepositoryShared,
         )
     )
     val playerViewModel: PlayerViewModel = viewModel(

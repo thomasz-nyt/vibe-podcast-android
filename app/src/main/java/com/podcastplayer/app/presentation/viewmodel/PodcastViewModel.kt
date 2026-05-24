@@ -11,6 +11,7 @@ import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.PodcastRepository
+import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.domain.model.PodcastQueue
@@ -33,7 +34,8 @@ class PodcastViewModel(
     private val downloadManager: DownloadManager,
     private val savedPodcastsStorage: SavedPodcastsStorage,
     private val queueStorage: QueueStorage,
-    private val playbackProgressDao: PlaybackProgressDao
+    private val playbackProgressDao: PlaybackProgressDao,
+    private val urlDownloadRepository: UrlDownloadRepository? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PodcastUiState>(PodcastUiState.Initial)
@@ -95,27 +97,44 @@ class PodcastViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** All completed URL downloads (`url:<id>` mediaId space). Empty if the repository wasn't injected. */
+    private val urlCompletedFlow = urlDownloadRepository?.observeCompleted()
+        ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
     /**
-     * In-progress episodes for the Home "Continue listening" shelf. We only have episode
-     * metadata for downloaded episodes (RSS feeds aren't persisted), so this is the
-     * intersection of downloads and in-progress progress entries, most-recent first.
+     * In-progress media for the Home "Continue listening" shelf. Joins playback-progress
+     * rows against both RSS downloads and URL-downloaded clips, most-recent first.
+     * Rows that don't match either source are dropped (we'd have no metadata to render).
      */
     val continueListening: StateFlow<List<ContinueListeningUi>> = combine(
         downloadedEpisodesUi,
-        playbackProgressDao.observeInProgress()
-    ) { downloads, progress ->
-        val downloadsById = downloads.associateBy { it.episode.id }
+        urlCompletedFlow,
+        playbackProgressDao.observeInProgress(),
+    ) { downloads, urlDownloads, progress ->
+        val rssById = downloads.associateBy { it.episode.id }
+        val urlById = urlDownloads.associateBy { "url:${it.id}" }
         progress.mapNotNull { entry ->
-            val ui = downloadsById[entry.episodeId] ?: return@mapNotNull null
             val fraction = if (entry.durationMs > 0L) {
                 (entry.positionMs.toFloat() / entry.durationMs.toFloat()).coerceIn(0f, 1f)
             } else 0f
+            val remainingMs = (entry.durationMs - entry.positionMs).coerceAtLeast(0L)
+            rssById[entry.episodeId]?.let { ui ->
+                return@mapNotNull ContinueListeningUi(
+                    episode = ui.episode,
+                    podcastTitle = ui.podcastTitle,
+                    podcastArtworkUrl = ui.podcastArtworkUrl,
+                    progressFraction = fraction,
+                    remainingMs = remainingMs,
+                )
+            }
+            val urlEntity = urlById[entry.episodeId] ?: return@mapNotNull null
+            val episode = urlDownloadRepository?.toEpisode(urlEntity) ?: return@mapNotNull null
             ContinueListeningUi(
-                episode = ui.episode,
-                podcastTitle = ui.podcastTitle,
-                podcastArtworkUrl = ui.podcastArtworkUrl,
+                episode = episode,
+                podcastTitle = urlEntity.uploader ?: urlEntity.source.uppercase(),
+                podcastArtworkUrl = urlEntity.thumbnailUrl,
                 progressFraction = fraction,
-                remainingMs = (entry.durationMs - entry.positionMs).coerceAtLeast(0L)
+                remainingMs = remainingMs,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
