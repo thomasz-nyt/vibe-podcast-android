@@ -267,6 +267,45 @@ class PodcastViewModel(
         return result
     }
 
+    /**
+     * Mark an episode as played without actually playing it. Stamps the
+     * playback_progress row so it appears in the "completed" filter and
+     * doesn't get auto-downloaded again.
+     */
+    fun markEpisodePlayed(episode: Episode) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val durationMs = episode.duration ?: 0L
+            val now = System.currentTimeMillis()
+            playbackProgressDao.upsert(
+                PlaybackProgressEntity(
+                    episodeId = episode.id,
+                    podcastId = episode.podcastId,
+                    positionMs = durationMs,
+                    durationMs = durationMs,
+                    completed = true,
+                    lastPlayedAtMs = now,
+                    updatedAtMs = now,
+                )
+            )
+        }
+    }
+
+    /**
+     * Reset the "played" state for an episode. Drops the progress row entirely
+     * so it surfaces back in feeds and is eligible for auto-download.
+     */
+    fun markEpisodeUnplayed(episode: Episode) {
+        viewModelScope.launch(Dispatchers.IO) {
+            playbackProgressDao.deleteByEpisodeId(episode.id)
+        }
+    }
+
+    /** Re-fetch the RSS feed for the currently-selected podcast. */
+    fun refreshSelectedPodcastEpisodes() {
+        val podcast = _selectedPodcast.value ?: return
+        loadEpisodes(podcast)
+    }
+
     fun savePodcast(podcast: Podcast) {
         viewModelScope.launch { savedPodcastsStorage.save(podcast) }
     }

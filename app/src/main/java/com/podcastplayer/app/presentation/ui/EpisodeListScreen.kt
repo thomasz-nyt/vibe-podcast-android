@@ -28,6 +28,8 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -135,6 +137,13 @@ fun EpisodeListScreen(
                     title = podcast?.title ?: "Episodes",
                     eyebrow = podcast?.artist,
                     onBack = onBack,
+                    actions = {
+                        VibeCircleIconButton(
+                            icon = Icons.Outlined.Refresh,
+                            description = "Refresh episodes",
+                            onClick = { podcastViewModel.refreshSelectedPodcastEpisodes() },
+                        )
+                    },
                 )
 
                 if (isSubscribed && podcast != null) {
@@ -232,6 +241,8 @@ fun EpisodeListScreen(
                                         onDelete = {
                                             scope.launch { podcastViewModel.deleteDownload(episode.id) }
                                         },
+                                        onMarkPlayed = { podcastViewModel.markEpisodePlayed(episode) },
+                                        onMarkUnplayed = { podcastViewModel.markEpisodeUnplayed(episode) },
                                     )
                                 }
                             }
@@ -651,10 +662,13 @@ private fun EpisodeRow(
     onClick: () -> Unit,
     onDownload: () -> Unit,
     onDelete: () -> Unit,
+    onMarkPlayed: () -> Unit = {},
+    onMarkUnplayed: () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     val description = remember(episode.description) { episode.description.stripHtml() }
     var expanded by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
 
     VibeSurface(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(14.dp)) {
@@ -707,6 +721,39 @@ private fun EpisodeRow(
                     }
                 }
                 Spacer(Modifier.width(8.dp))
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { menuOpen = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.MoreHoriz,
+                            contentDescription = "Episode actions",
+                            tint = colors.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                    ) {
+                        if (isCompleted) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Mark as unplayed") },
+                                onClick = { menuOpen = false; onMarkUnplayed() },
+                            )
+                        } else {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Mark as played") },
+                                onClick = { menuOpen = false; onMarkPlayed() },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
                         .size(40.dp)
