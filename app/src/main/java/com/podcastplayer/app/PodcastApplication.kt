@@ -3,6 +3,7 @@ package com.podcastplayer.app
 import android.app.Application
 import android.util.Log
 import com.podcastplayer.app.service.AutoDownloadWorker
+import com.podcastplayer.app.util.CrashRecorder
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -31,6 +32,10 @@ class PodcastApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // Install before anything else so we capture crashes that happen during
+        // early init (e.g. yt-dlp unpacking, Room DB open, WorkManager scheduling).
+        CrashRecorder.install(this)
 
         appScope.launch {
             initYoutubeDl()
