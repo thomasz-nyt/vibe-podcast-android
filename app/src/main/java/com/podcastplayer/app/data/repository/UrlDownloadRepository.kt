@@ -1,6 +1,8 @@
 package com.podcastplayer.app.data.repository
 
 import android.content.Context
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.MediaStoreSaver
@@ -8,6 +10,7 @@ import com.podcastplayer.app.data.local.UrlDownloadDao
 import com.podcastplayer.app.data.local.UrlDownloadEntity
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.MediaType
+import com.podcastplayer.app.service.UrlDownloadService
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -53,6 +56,14 @@ class UrlDownloadRepository(private val context: Context) {
         }
     }
 
+    /** Failed or canceled items that need a visible retry/delete surface. */
+    fun observeNeedsAttention(): Flow<List<UrlDownloadEntity>> = dao.observeAll().map { all ->
+        all.filter {
+            it.status == UrlDownloadStatus.FAILED.name ||
+                it.status == UrlDownloadStatus.CANCELED.name
+        }
+    }
+
     suspend fun get(id: String): UrlDownloadEntity? = dao.getById(id)
 
     fun observe(id: String): Flow<UrlDownloadEntity?> = dao.observeById(id)
@@ -82,6 +93,29 @@ class UrlDownloadRepository(private val context: Context) {
             null
         } catch (e: Throwable) {
             null
+        }
+    }
+
+    suspend fun fetchYoutubeSubscriptionMetadata(rawUrl: String): UrlMetadata? = withContext(Dispatchers.IO) {
+        if (!PodcastApplication.youtubeDlReady) return@withContext null
+        if (UrlSource.classify(rawUrl) != UrlSource.YOUTUBE) return@withContext null
+        try {
+            val request = YoutubeDLRequest(rawUrl).apply {
+                addOption("--flat-playlist")
+                addOption("--dump-single-json")
+                addOption("--playlist-end", "1")
+                addOption("--socket-timeout", "30")
+            }
+            val response = YoutubeDL.getInstance().execute(request)
+            val root = JsonParser().parse(response.out).asJsonObject
+            UrlMetadata(
+                title = root.stringOrNull("title") ?: rawUrl,
+                uploader = root.stringOrNull("uploader") ?: root.stringOrNull("channel"),
+                thumbnailUrl = root.stringOrNull("thumbnail"),
+                durationMs = null,
+            )
+        } catch (e: Throwable) {
+            fetchMetadata(rawUrl)
         }
     }
 
@@ -129,6 +163,10 @@ class UrlDownloadRepository(private val context: Context) {
         id
     }
 
+    fun startPump() {
+        UrlDownloadService.startPump(context)
+    }
+
     suspend fun markExtracting(id: String) = updateProgress(id, UrlDownloadStatus.EXTRACTING_METADATA, 0f)
     suspend fun markDownloading(id: String, progress: Float) =
         updateProgress(id, UrlDownloadStatus.DOWNLOADING, progress)
@@ -143,6 +181,30 @@ class UrlDownloadRepository(private val context: Context) {
 
     suspend fun markCanceled(id: String) {
         dao.markFailed(id, UrlDownloadStatus.CANCELED.name, null)
+    }
+
+    suspend fun retry(id: String): Boolean = withContext(Dispatchers.IO) {
+        val entity = dao.getById(id) ?: return@withContext false
+        if (entity.status !in RETRYABLE_STATUSES) return@withContext false
+        dao.resetForRetry(
+            id = id,
+            status = UrlDownloadStatus.QUEUED.name,
+            progress = 0f,
+            error = null,
+        )
+        true
+    }
+
+    suspend fun requeueInterrupted() = withContext(Dispatchers.IO) {
+        dao.resetStatuses(
+            fromStatuses = listOf(
+                UrlDownloadStatus.EXTRACTING_METADATA.name,
+                UrlDownloadStatus.DOWNLOADING.name,
+            ),
+            toStatus = UrlDownloadStatus.QUEUED.name,
+            progress = 0f,
+            error = "Interrupted before completion. Retrying…",
+        )
     }
 
     suspend fun markCompleted(id: String, localPath: String, fileSize: Long) {
@@ -236,6 +298,17 @@ class UrlDownloadRepository(private val context: Context) {
             UrlDownloadStatus.EXTRACTING_METADATA.name,
             UrlDownloadStatus.DOWNLOADING.name,
         )
+
+        private val RETRYABLE_STATUSES = setOf(
+            UrlDownloadStatus.FAILED.name,
+            UrlDownloadStatus.CANCELED.name,
+        )
+    }
+
+    private fun JsonObject.stringOrNull(name: String): String? {
+        val value = get(name) ?: return null
+        if (value.isJsonNull) return null
+        return runCatching { value.asString }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 }
 

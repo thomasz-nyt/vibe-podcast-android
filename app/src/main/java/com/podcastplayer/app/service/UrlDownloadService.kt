@@ -82,6 +82,7 @@ class UrlDownloadService : Service() {
      */
     private suspend fun pumpQueue() {
         pumpMutex.withLock {
+            repository.requeueInterrupted()
             while (!stopRequested) {
                 val nextId = nextQueuedId() ?: break
                 processOne(nextId)

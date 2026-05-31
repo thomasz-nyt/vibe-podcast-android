@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Podcasts
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
+import com.podcastplayer.app.data.local.UrlDownloadEntity
+import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
@@ -89,9 +92,12 @@ private fun formatBytes(bytes: Long): String {
 @Composable
 fun DownloadsScreen(
     entries: List<DownloadEntryUi>,
+    failedUrlDownloads: List<UrlDownloadEntity> = emptyList(),
     totalBytes: Long,
     onPlay: (DownloadEntryUi) -> Unit,
     onDelete: (DownloadEntryUi) -> Unit,
+    onRetryUrlDownload: (String) -> Unit = {},
+    onDeleteUrlDownload: (String) -> Unit = {},
     onDeleteAll: () -> Unit,
     @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
 ) {
@@ -125,7 +131,7 @@ fun DownloadsScreen(
                 },
             )
 
-            if (entries.isEmpty()) {
+            if (entries.isEmpty() && failedUrlDownloads.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -139,20 +145,6 @@ fun DownloadsScreen(
                     )
                 }
             } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    VibeSectionEyebrow(text = "Saved", modifier = Modifier.weight(1f))
-                    Text(
-                        text = "${entries.size}",
-                        fontFamily = JetBrainsMono,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
@@ -163,7 +155,50 @@ fun DownloadsScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(entries, key = { it.id }) { entry ->
+                    if (failedUrlDownloads.isNotEmpty()) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                VibeSectionEyebrow(text = "Needs attention", modifier = Modifier.weight(1f))
+                                Text(
+                                    text = "${failedUrlDownloads.size}",
+                                    fontFamily = JetBrainsMono,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        items(failedUrlDownloads, key = { "failed:${it.id}" }) { item ->
+                            FailedUrlDownloadRow(
+                                item = item,
+                                onRetry = { onRetryUrlDownload(item.id) },
+                                onDelete = { onDeleteUrlDownload(item.id) },
+                            )
+                        }
+                    }
+                    if (entries.isNotEmpty()) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                VibeSectionEyebrow(text = "Saved", modifier = Modifier.weight(1f))
+                                Text(
+                                    text = "${entries.size}",
+                                    fontFamily = JetBrainsMono,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    items(entries, key = { "saved:${it.id}" }) { entry ->
                         DownloadRow(
                             entry = entry,
                             onPlay = { onPlay(entry) },
@@ -194,6 +229,88 @@ fun DownloadsScreen(
                 }
             },
             containerColor = MaterialTheme.colorScheme.surface,
+        )
+    }
+}
+
+@Composable
+private fun FailedUrlDownloadRow(
+    item: UrlDownloadEntity,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, shape)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncImage(
+            model = item.thumbnailUrl,
+            contentDescription = item.title,
+            modifier = Modifier
+                .size(60.dp)
+                .clip(RoundedCornerShape(10.dp)),
+            placeholder = painterResource(R.drawable.ic_artwork_placeholder),
+            error = painterResource(R.drawable.ic_artwork_placeholder),
+            fallback = painterResource(R.drawable.ic_artwork_placeholder),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KindBadge(
+                    if (item.mediaType == "video") DownloadEntryUi.Kind.URL_VIDEO else DownloadEntryUi.Kind.URL_AUDIO
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = UrlSource.fromTag(item.source).displayName.uppercase(),
+                    fontFamily = JetBrainsMono,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.2.sp,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = item.errorMessage ?: item.status.lowercase().replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        VibeCircleIconButton(
+            icon = Icons.Outlined.Delete,
+            description = "Delete failed download",
+            onClick = onDelete,
+            size = 36.dp,
+            iconSize = 18.dp,
+        )
+        Spacer(Modifier.width(6.dp))
+        VibeCircleIconButton(
+            icon = Icons.Outlined.Refresh,
+            description = "Retry download",
+            onClick = onRetry,
+            size = 40.dp,
+            iconSize = 20.dp,
+            tinted = true,
         )
     }
 }

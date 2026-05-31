@@ -12,6 +12,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -46,6 +47,7 @@ class PlayerService : MediaSessionService() {
     private val CHANNEL_ID = "podcast_player_channel"
     private val NOTIFICATION_ID = 1
 
+    @UnstableApi
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -200,6 +202,7 @@ class PlayerService : MediaSessionService() {
         }
     }
 
+    @UnstableApi
     private fun setupNotification() {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -298,6 +301,7 @@ class PlayerService : MediaSessionService() {
         return mediaSession
     }
 
+    @UnstableApi
     override fun onDestroy() {
         stopPersistLoop()
         persistProgress(markCompleted = false)
