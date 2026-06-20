@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -29,7 +30,6 @@ import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlayerState
-import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
 /**
@@ -51,7 +51,9 @@ fun MiniPlayerBar(
     val duration = playerState.duration.coerceAtLeast(1L)
     val position = playerState.currentPosition.coerceIn(0L, duration)
     val progress = position.toFloat() / duration.toFloat()
-    val isPlaying = playerState.state == PlaybackState.PLAYING
+    val showsPause = playerState.playRequested
+    val controlColor = if (playerState.playbackError != null) colors.error else colors.primary
+    val controlContentColor = if (playerState.playbackError != null) colors.onError else colors.onPrimary
 
     Surface(
         modifier = modifier
@@ -126,14 +128,25 @@ fun MiniPlayerBar(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(CircleShape)
-                        .background(colors.primary)
+                        .background(controlColor)
                         .clickable { onPlayPause() },
                     contentAlignment = Alignment.Center,
                 ) {
+                    if (playerState.isBuffering) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(38.dp),
+                            color = controlContentColor,
+                            strokeWidth = 2.dp,
+                        )
+                    }
                     Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = colors.onPrimary,
+                        imageVector = if (showsPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = when {
+                            playerState.playbackError != null -> "Retry playback"
+                            showsPause -> "Pause"
+                            else -> "Play"
+                        },
+                        tint = controlContentColor,
                         modifier = Modifier.size(20.dp),
                     )
                 }

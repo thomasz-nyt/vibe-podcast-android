@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -63,7 +64,6 @@ import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.MediaType
-import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
@@ -87,7 +87,7 @@ fun PlayerScreen(
 ) {
     val colors = MaterialTheme.colorScheme
     val description = remember(episode.description) { episode.description.stripHtml() }
-    val isPlaying = playerState.state == PlaybackState.PLAYING
+    val showsPause = playerState.playRequested
     val duration = playerState.duration.coerceAtLeast(1L)
     val position = playerState.currentPosition.coerceIn(0L, duration)
 
@@ -147,7 +147,9 @@ fun PlayerScreen(
     if (isVideoFullscreen) {
         PlayerVideoFullscreen(
             episode = episode,
-            isPlaying = isPlaying,
+            showsPause = showsPause,
+            isBuffering = playerState.isBuffering,
+            hasPlaybackError = playerState.playbackError != null,
             position = position,
             duration = duration,
             hasPrevious = hasPrevious,
@@ -165,7 +167,9 @@ fun PlayerScreen(
         PlayerLandscape(
             episode = episode,
             artworkUrl = artworkUrl,
-            isPlaying = isPlaying,
+            showsPause = showsPause,
+            isBuffering = playerState.isBuffering,
+            hasPlaybackError = playerState.playbackError != null,
             position = position,
             duration = duration,
             playbackSpeed = playerState.playbackSpeed,
@@ -285,6 +289,16 @@ fun PlayerScreen(
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
         )
+        playerState.playbackError?.let { error ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "$error — tap Play to retry",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.error,
+                maxLines = 2,
+                textAlign = TextAlign.Center,
+            )
+        }
 
         Spacer(Modifier.height(24.dp))
 
@@ -381,14 +395,31 @@ fun PlayerScreen(
                 modifier = Modifier
                     .size(80.dp)
                     .clip(CircleShape)
-                    .background(colors.primary)
+                    .background(
+                        if (playerState.playbackError != null) colors.error else colors.primary,
+                    )
                     .clickable(onClick = onPlayPause),
                 contentAlignment = Alignment.Center,
             ) {
+                if (playerState.isBuffering) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(68.dp),
+                        color = if (playerState.playbackError != null) {
+                            colors.onError
+                        } else {
+                            colors.onPrimary
+                        },
+                        strokeWidth = 3.dp,
+                    )
+                }
                 Icon(
-                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = colors.onPrimary,
+                    imageVector = if (showsPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = when {
+                        playerState.playbackError != null -> "Retry playback"
+                        showsPause -> "Pause"
+                        else -> "Play"
+                    },
+                    tint = if (playerState.playbackError != null) colors.onError else colors.onPrimary,
                     modifier = Modifier.size(40.dp),
                 )
             }
@@ -553,7 +584,9 @@ private fun SleepOption(minutes: Long, onClick: () -> Unit) {
 private fun PlayerLandscape(
     episode: Episode,
     artworkUrl: String?,
-    isPlaying: Boolean,
+    showsPause: Boolean,
+    isBuffering: Boolean,
+    hasPlaybackError: Boolean,
     position: Long,
     duration: Long,
     playbackSpeed: Float,
@@ -570,7 +603,6 @@ private fun PlayerLandscape(
     onDismiss: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val progress = position.toFloat() / duration.toFloat()
     var sleepSheetOpen by remember { mutableStateOf(false) }
 
     Row(
@@ -711,14 +743,25 @@ private fun PlayerLandscape(
                     modifier = Modifier
                         .size(60.dp)
                         .clip(CircleShape)
-                        .background(colors.primary)
+                        .background(if (hasPlaybackError) colors.error else colors.primary)
                         .clickable(onClick = onPlayPause),
                     contentAlignment = Alignment.Center,
                 ) {
+                    if (isBuffering) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(50.dp),
+                            color = if (hasPlaybackError) colors.onError else colors.onPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                    }
                     Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = colors.onPrimary,
+                        imageVector = if (showsPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = when {
+                            hasPlaybackError -> "Retry playback"
+                            showsPause -> "Pause"
+                            else -> "Play"
+                        },
+                        tint = if (hasPlaybackError) colors.onError else colors.onPrimary,
                         modifier = Modifier.size(28.dp),
                     )
                 }
@@ -797,7 +840,9 @@ private fun PlayerLandscape(
 @Composable
 private fun PlayerVideoFullscreen(
     episode: Episode,
-    isPlaying: Boolean,
+    showsPause: Boolean,
+    isBuffering: Boolean,
+    hasPlaybackError: Boolean,
     position: Long,
     duration: Long,
     hasPrevious: Boolean,
@@ -916,14 +961,25 @@ private fun PlayerVideoFullscreen(
                     modifier = Modifier
                         .size(68.dp)
                         .clip(CircleShape)
-                        .background(Color.White)
+                        .background(if (hasPlaybackError) Color.Red else Color.White)
                         .clickable(onClick = onPlayPause),
                     contentAlignment = Alignment.Center,
                 ) {
+                    if (isBuffering) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(56.dp),
+                            color = Color.Black,
+                            strokeWidth = 3.dp,
+                        )
+                    }
                     Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        tint = Color.Black,
+                        imageVector = if (showsPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = when {
+                            hasPlaybackError -> "Retry playback"
+                            showsPause -> "Pause"
+                            else -> "Play"
+                        },
+                        tint = if (hasPlaybackError) Color.White else Color.Black,
                         modifier = Modifier.size(36.dp),
                     )
                 }

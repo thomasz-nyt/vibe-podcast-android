@@ -3,176 +3,167 @@ package com.podcastplayer.app.service
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import androidx.core.content.ContextCompat
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.domain.model.Episode
+import com.podcastplayer.app.domain.model.MediaType
 import java.io.File
-import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.withContext
 
-class PlayerController private constructor(private val context: Context) {
+class PlayerController private constructor(private val context: Context) : PlaybackController {
 
-    private val sessionToken = SessionToken(
-        context,
-        ComponentName(context, PlayerService::class.java)
-    )
-
-    private val controllerFuture = MediaController.Builder(context, sessionToken)
-        .buildAsync()
-
-    private val executor = Executors.newSingleThreadExecutor()
+    private val sessionToken = SessionToken(context, ComponentName(context, PlayerService::class.java))
+    private val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
     private val playbackSessionStorage = PlaybackSessionStorage(context)
-    private val playbackProgressDao by lazy {
-        DatabaseProvider.getDatabase(context).playbackProgressDao()
+    private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(context).playbackProgressDao() }
+    private val listeners = ConcurrentHashMap<PlaybackControllerListener, Player.Listener>()
+
+    @Volatile
+    private var latestPlaybackRequest = 0L
+
+    override fun beginPlaybackRequest(requestId: Long) {
+        latestPlaybackRequest = requestId
     }
 
-    private fun episodeToMediaItem(
-        episode: com.podcastplayer.app.domain.model.Episode,
-        artworkUrl: String?
-    ): androidx.media3.common.MediaItem {
-        val metadata = androidx.media3.common.MediaMetadata.Builder()
+    private fun episodeToMediaItem(episode: Episode, artworkUrl: String?): MediaItem {
+        val metadata = MediaMetadata.Builder()
             .setTitle(episode.title)
             .setArtist(episode.podcastId)
             .setDescription(episode.description)
-            .setArtworkUri(artworkUrl?.let { android.net.Uri.parse(it) })
+            .setArtworkUri(artworkUrl?.let(Uri::parse))
             .build()
-
-        val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let { resolveLocalUri(it) }
+        val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let(::resolveLocalUri)
             ?: Uri.parse(episode.audioUrl)
-
-        return androidx.media3.common.MediaItem.Builder()
+        return MediaItem.Builder()
             .setMediaId(episode.id)
             .setUri(mediaUri)
             .setMediaMetadata(metadata)
             .build()
     }
 
-    /**
-     * Saved listen-position for [episodeId], or null if the user hasn't started it
-     * or already finished it. Looked up before `prepare()` so resume is baked into
-     * the MediaItem rather than racing the player's STATE_READY callback.
-     */
     private suspend fun resumePositionFor(episodeId: String): Long? = withContext(Dispatchers.IO) {
-        val saved = playbackProgressDao.getByEpisodeId(episodeId) ?: return@withContext null
-        if (saved.completed || saved.positionMs <= 0L) null else saved.positionMs
+        playbackProgressDao.getByEpisodeId(episodeId)
+            ?.takeIf { !it.completed && it.positionMs > 0L }
+            ?.positionMs
     }
 
-    suspend fun playEpisode(episode: com.podcastplayer.app.domain.model.Episode, artworkUrl: String?): Long {
-        val controller = controllerFuture.await()
+    override suspend fun prepareEpisode(episode: Episode, artworkUrl: String?, requestId: Long): Long? {
         val startMs = resumePositionFor(episode.id) ?: 0L
+        if (requestId != latestPlaybackRequest) return null
+        val controller = controllerFuture.await()
+        if (requestId != latestPlaybackRequest) return null
         controller.setMediaItem(episodeToMediaItem(episode, artworkUrl), startMs)
         controller.prepare()
-        controller.play()
         return startMs
     }
 
-    suspend fun playEpisodes(
-        episodes: List<com.podcastplayer.app.domain.model.Episode>,
-        defaultArtworkUrl: String?
-    ): Long {
-        if (episodes.isEmpty()) return 0L
-
-        val controller = controllerFuture.await()
+    override suspend fun prepareEpisodes(
+        episodes: List<Episode>,
+        defaultArtworkUrl: String?,
+        requestId: Long,
+    ): Long? {
+        if (episodes.isEmpty()) return null
+        val startMs = resumePositionFor(episodes.first().id) ?: 0L
+        if (requestId != latestPlaybackRequest) return null
         val items = episodes.map { episode ->
-            episodeToMediaItem(
-                episode = episode,
-                artworkUrl = episode.imageUrl ?: defaultArtworkUrl
-            )
+            episodeToMediaItem(episode, episode.imageUrl ?: defaultArtworkUrl)
         }
-
-        val firstEpisodeId = episodes.first().id
-        val startMs = resumePositionFor(firstEpisodeId) ?: 0L
-
-        controller.setMediaItems(items, /* startIndex= */ 0, /* startPositionMs= */ startMs)
+        val controller = controllerFuture.await()
+        if (requestId != latestPlaybackRequest) return null
+        controller.setMediaItems(items, 0, startMs)
         controller.prepare()
-        controller.play()
         return startMs
     }
 
-    suspend fun play() {
+    override suspend fun play(requestId: Long?) {
+        if (requestId != null && requestId != latestPlaybackRequest) return
         controllerFuture.await().play()
     }
 
-    suspend fun pause() {
-        val controller = controllerFuture.await()
-        controller.pause()
-    }
+    override suspend fun pause() = controllerFuture.await().pause()
+    override suspend fun seekTo(position: Long) = controllerFuture.await().seekTo(position)
+    override suspend fun skipToPrevious() = controllerFuture.await().seekToPreviousMediaItem()
+    override suspend fun skipToNext() = controllerFuture.await().seekToNextMediaItem()
 
-    suspend fun seekTo(position: Long) {
-        val controller = controllerFuture.await()
-        controller.seekTo(position)
-    }
-
-    suspend fun skipToPrevious() {
-        val controller = controllerFuture.await()
-        controller.seekToPreviousMediaItem()
-    }
-
-    suspend fun skipToNext() {
-        val controller = controllerFuture.await()
-        controller.seekToNextMediaItem()
-    }
-
-    suspend fun hasPrevious(): Boolean {
-        val controller = controllerFuture.await()
-        return controller.hasPreviousMediaItem()
-    }
-
-    suspend fun hasNext(): Boolean {
-        val controller = controllerFuture.await()
-        return controller.hasNextMediaItem()
-    }
-
-    suspend fun setPlaybackSpeed(speed: Float) {
+    override suspend fun setPlaybackSpeed(speed: Float) {
         val controller = controllerFuture.await()
         controller.playbackParameters = controller.playbackParameters.withSpeed(speed)
     }
 
-    suspend fun getCurrentPosition(): Long {
-        val controller = controllerFuture.await()
-        return controller.currentPosition
+    override suspend fun stop() {
+        controllerFuture.await().run {
+            stop()
+            clearMediaItems()
+        }
     }
 
-    suspend fun getDuration(): Long {
-        val controller = controllerFuture.await()
-        return controller.duration
-    }
+    override suspend fun snapshot(): ControllerSnapshot = snapshotOf(controllerFuture.await())
 
-    suspend fun getPlaybackState(): Int {
-        val controller = controllerFuture.await()
-        return controller.playbackState
-    }
-
-    fun addListener(listener: Player.Listener) {
-        controllerFuture.addListener(
-            {
-                try {
-                    controllerFuture.get().addListener(listener)
-                } catch (_: Exception) {
-                }
-            },
-            executor
+    private fun snapshotOf(controller: MediaController): ControllerSnapshot {
+        val item = controller.currentMediaItem
+        val episode = item?.let(::mediaItemToEpisode)
+        return ControllerSnapshot(
+            currentEpisode = episode,
+            artworkUrl = item?.mediaMetadata?.artworkUri?.toString(),
+            playbackState = controller.playbackState,
+            playWhenReady = controller.playWhenReady,
+            isPlaying = controller.isPlaying,
+            playbackError = controller.playerError?.message,
+            currentPosition = controller.currentPosition.coerceAtLeast(0L),
+            duration = controller.duration.coerceAtLeast(0L),
+            hasPrevious = controller.hasPreviousMediaItem(),
+            hasNext = controller.hasNextMediaItem(),
+            playbackSpeed = controller.playbackParameters.speed,
         )
     }
 
-    suspend fun stop() {
+    override suspend fun addListener(listener: PlaybackControllerListener) {
         val controller = controllerFuture.await()
-        controller.stop()
-        controller.clearMediaItems()
+        withContext(Dispatchers.Main.immediate) {
+            val media3Listener = object : Player.Listener {
+                override fun onEvents(player: Player, events: Player.Events) {
+                    listener.onSnapshotChanged(snapshotOf(controller))
+                }
+            }
+            listeners.put(listener, media3Listener)?.let(controller::removeListener)
+            controller.addListener(media3Listener)
+            listener.onSnapshotChanged(snapshotOf(controller))
+        }
     }
 
-    suspend fun isPlaying(): Boolean {
-        return controllerFuture.await().isPlaying
+    override fun removeListener(listener: PlaybackControllerListener) {
+        val media3Listener = listeners.remove(listener) ?: return
+        controllerFuture.addListener(
+            { controllerFuture.get().removeListener(media3Listener) },
+            ContextCompat.getMainExecutor(context),
+        )
     }
 
-    suspend fun getCurrentEpisode(): com.podcastplayer.app.domain.model.Episode? {
-        val item = controllerFuture.await().currentMediaItem ?: return null
+    override suspend fun restoreLastSessionIfNeeded(): Episode? {
+        val controller = controllerFuture.await()
+        if (controller.mediaItemCount == 0) {
+            val session = playbackSessionStorage.load() ?: return null
+            if (session.items.isEmpty()) return null
+            controller.setMediaItems(session.items, session.currentIndex, session.currentPositionMs)
+            controller.prepare()
+            controller.playbackParameters = controller.playbackParameters.withSpeed(session.playbackSpeed)
+            if (session.wasPlaying && !session.isCompleted) controller.play() else controller.pause()
+        }
+        return controller.currentMediaItem?.let(::mediaItemToEpisode)
+    }
+
+    private fun mediaItemToEpisode(item: MediaItem): Episode {
         val uri = item.localConfiguration?.uri?.toString().orEmpty()
         val isLocal = uri.startsWith("file://") || uri.startsWith("content://")
-        return com.podcastplayer.app.domain.model.Episode(
+        return Episode(
             id = item.mediaId,
             podcastId = item.mediaMetadata.artist?.toString().orEmpty(),
             title = item.mediaMetadata.title?.toString().orEmpty(),
@@ -189,88 +180,31 @@ class PlayerController private constructor(private val context: Context) {
         )
     }
 
-    /** Build a media URI from a stored path — handles file paths AND content:// URIs. */
     private fun resolveLocalUri(localPath: String): Uri =
         if (localPath.startsWith("content://")) Uri.parse(localPath) else Uri.fromFile(File(localPath))
 
-    /**
-     * Best-effort inference of [com.podcastplayer.app.domain.model.MediaType] from a
-     * media URI, used when restoring a session or reconstructing an Episode from the
-     * MediaController. We check the extension for `file://` URIs and ask the
-     * ContentResolver for `content://` URIs (e.g. MediaStore-published downloads,
-     * which don't carry a visible extension). Defaults to AUDIO.
-     */
-    private fun inferMediaType(uri: String): com.podcastplayer.app.domain.model.MediaType {
+    private fun inferMediaType(uri: String): MediaType {
         if (uri.startsWith("content://")) {
-            val mime = try {
-                context.contentResolver.getType(Uri.parse(uri))
-            } catch (_: Throwable) {
-                null
-            }
-            if (mime?.startsWith("video/") == true) {
-                return com.podcastplayer.app.domain.model.MediaType.VIDEO
-            }
-            if (mime?.startsWith("audio/") == true) {
-                return com.podcastplayer.app.domain.model.MediaType.AUDIO
-            }
-            // Fall through to extension sniffing if MIME isn't available.
+            val mime = runCatching { context.contentResolver.getType(Uri.parse(uri)) }.getOrNull()
+            if (mime?.startsWith("video/") == true) return MediaType.VIDEO
+            if (mime?.startsWith("audio/") == true) return MediaType.AUDIO
         }
-        val ext = uri.substringAfterLast('.', "").substringBefore('?').lowercase()
-        val videoExts = setOf("mp4", "webm", "mkv", "mov", "avi", "m4v")
-        return if (ext in videoExts) {
-            com.podcastplayer.app.domain.model.MediaType.VIDEO
+        val extension = uri.substringAfterLast('.', "").substringBefore('?').lowercase()
+        return if (extension in setOf("mp4", "webm", "mkv", "mov", "avi", "m4v")) {
+            MediaType.VIDEO
         } else {
-            com.podcastplayer.app.domain.model.MediaType.AUDIO
+            MediaType.AUDIO
         }
     }
 
-    suspend fun restoreLastSessionIfNeeded(): com.podcastplayer.app.domain.model.Episode? {
-        val controller = controllerFuture.await()
-        if (controller.mediaItemCount > 0) {
-            return getCurrentEpisode()
-        }
-
-        val session = playbackSessionStorage.load() ?: return null
-        if (session.items.isEmpty()) return null
-
-        controller.setMediaItems(session.items, session.currentIndex, session.currentPositionMs)
-        controller.prepare()
-        controller.playbackParameters = controller.playbackParameters.withSpeed(session.playbackSpeed)
-
-        if (session.wasPlaying && !session.isCompleted) {
-            controller.play()
-        } else {
-            controller.pause()
-        }
-
-        return getCurrentEpisode()
-    }
-
-    suspend fun getCurrentArtworkUrl(): String? {
-        return controllerFuture.await().currentMediaItem?.mediaMetadata?.artworkUri?.toString()
-    }
-
-    fun release() {
-        MediaController.releaseFuture(controllerFuture)
-        executor.shutdown()
-    }
-
-    /**
-     * Suspends until the underlying [MediaController] is available, then returns it.
-     *
-     * Used by the video player surface (issue #33) to bind an Android `PlayerView`
-     * to the same Player instance that drives audio playback.
-     */
+    fun release() = MediaController.releaseFuture(controllerFuture)
     suspend fun awaitController(): MediaController = controllerFuture.await()
 
     companion object {
-        @Volatile
-        private var instance: PlayerController? = null
+        @Volatile private var instance: PlayerController? = null
 
-        fun getInstance(context: Context): PlayerController {
-            return instance ?: synchronized(this) {
-                instance ?: PlayerController(context.applicationContext).also { instance = it }
-            }
+        fun getInstance(context: Context): PlayerController = instance ?: synchronized(this) {
+            instance ?: PlayerController(context.applicationContext).also { instance = it }
         }
     }
 }

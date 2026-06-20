@@ -13,5 +13,8 @@ data class PlayerState(
     val currentEpisode: Episode? = null,
     val currentPosition: Long = 0L,
     val duration: Long = 0L,
-    val playbackSpeed: Float = 1.0f
+    val playbackSpeed: Float = 1.0f,
+    val playRequested: Boolean = false,
+    val isBuffering: Boolean = false,
+    val playbackError: String? = null,
 )

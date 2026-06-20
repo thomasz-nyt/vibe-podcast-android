@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,7 +39,6 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.domain.model.Episode
-import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
@@ -142,7 +142,9 @@ fun MiniPlayerBarLandscape(
     val duration = playerState.duration.coerceAtLeast(1L)
     val position = playerState.currentPosition.coerceIn(0L, duration)
     val progress = position.toFloat() / duration.toFloat()
-    val isPlaying = playerState.state == PlaybackState.PLAYING
+    val showsPause = playerState.playRequested
+    val controlColor = if (playerState.playbackError != null) colors.error else colors.primary
+    val controlContentColor = if (playerState.playbackError != null) colors.onError else colors.onPrimary
 
     Box(
         modifier = modifier
@@ -210,14 +212,27 @@ fun MiniPlayerBarLandscape(
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(colors.primary)
+                    .background(controlColor)
                     .clickable { onPlayPause() },
                 contentAlignment = Alignment.Center,
             ) {
+                if (playerState.isBuffering) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(34.dp),
+                        color = controlContentColor,
+                        strokeWidth = 2.dp,
+                    )
+                }
                 Icon(
-                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = colors.onPrimary,
+                    imageVector = if (showsPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = if (playerState.playbackError != null) {
+                        "Retry playback"
+                    } else if (showsPause) {
+                        "Pause"
+                    } else {
+                        "Play"
+                    },
+                    tint = controlContentColor,
                     modifier = Modifier.size(18.dp),
                 )
             }
