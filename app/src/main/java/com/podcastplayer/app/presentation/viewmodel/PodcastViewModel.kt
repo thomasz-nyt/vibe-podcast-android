@@ -259,30 +259,6 @@ class PodcastViewModel(
 
     fun startDownload(episode: Episode) {
         if (_downloadProgress.value.containsKey(episode.id)) return
-        if (com.podcastplayer.app.data.repository.UrlSource.classify(episode.audioUrl) ==
-            com.podcastplayer.app.data.repository.UrlSource.YOUTUBE
-        ) {
-            val repository = urlDownloadRepository ?: run {
-                _downloadError.value = "YouTube downloader is not available."
-                return
-            }
-            _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
-            viewModelScope.launch {
-                repository.enqueue(
-                    rawUrl = episode.audioUrl,
-                    mediaType = episode.mediaType,
-                    prefetchedMetadata = com.podcastplayer.app.data.repository.UrlMetadata(
-                        title = episode.title,
-                        uploader = episode.description,
-                        thumbnailUrl = episode.imageUrl,
-                        durationMs = episode.duration,
-                    ),
-                )
-                repository.startPump()
-                _downloadProgress.value = _downloadProgress.value - episode.id
-            }
-            return
-        }
         _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
         // Surface the podcast title to DownloadManager so the MediaStore display
         // name reads as "<podcast> - <episode>.mp3" when browsed from VLC / Files.
@@ -370,32 +346,6 @@ class PodcastViewModel(
         }
         viewModelScope.launch {
             _feedPreviewState.value = FeedPreviewState.Loading(normalized)
-            if (com.podcastplayer.app.data.repository.UrlSource.classify(normalized) ==
-                com.podcastplayer.app.data.repository.UrlSource.YOUTUBE
-            ) {
-                val metadata = urlDownloadRepository?.fetchYoutubeSubscriptionMetadata(normalized)
-                if (metadata == null) {
-                    _feedPreviewState.value = FeedPreviewState.Error(
-                        "Could not read that YouTube playlist or channel.",
-                    )
-                    return@launch
-                }
-                _feedPreviewState.value = FeedPreviewState.Loaded(
-                    Podcast(
-                        id = "youtube:${
-                            com.podcastplayer.app.data.repository.UrlValidator.stableId(
-                                normalized,
-                                "subscription",
-                            )
-                        }",
-                        title = metadata.title,
-                        artist = metadata.uploader.orEmpty(),
-                        artworkUrl = metadata.thumbnailUrl,
-                        feedUrl = normalized,
-                    )
-                )
-                return@launch
-            }
             repository.getPodcastFromFeed(normalized).fold(
                 onSuccess = { podcast ->
                     _feedPreviewState.value = FeedPreviewState.Loaded(podcast)

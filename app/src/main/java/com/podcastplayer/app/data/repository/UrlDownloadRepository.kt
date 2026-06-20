@@ -1,8 +1,6 @@
 package com.podcastplayer.app.data.repository
 
 import android.content.Context
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.MediaStoreSaver
@@ -93,29 +91,6 @@ class UrlDownloadRepository(private val context: Context) {
             null
         } catch (e: Throwable) {
             null
-        }
-    }
-
-    suspend fun fetchYoutubeSubscriptionMetadata(rawUrl: String): UrlMetadata? = withContext(Dispatchers.IO) {
-        if (!PodcastApplication.youtubeDlReady) return@withContext null
-        if (UrlSource.classify(rawUrl) != UrlSource.YOUTUBE) return@withContext null
-        try {
-            val request = YoutubeDLRequest(rawUrl).apply {
-                addOption("--flat-playlist")
-                addOption("--dump-single-json")
-                addOption("--playlist-end", "1")
-                addOption("--socket-timeout", "30")
-            }
-            val response = YoutubeDL.getInstance().execute(request)
-            val root = JsonParser().parse(response.out).asJsonObject
-            UrlMetadata(
-                title = root.stringOrNull("title") ?: rawUrl,
-                uploader = root.stringOrNull("uploader") ?: root.stringOrNull("channel"),
-                thumbnailUrl = root.stringOrNull("thumbnail"),
-                durationMs = null,
-            )
-        } catch (e: Throwable) {
-            fetchMetadata(rawUrl)
         }
     }
 
@@ -303,12 +278,6 @@ class UrlDownloadRepository(private val context: Context) {
             UrlDownloadStatus.FAILED.name,
             UrlDownloadStatus.CANCELED.name,
         )
-    }
-
-    private fun JsonObject.stringOrNull(name: String): String? {
-        val value = get(name) ?: return null
-        if (value.isJsonNull) return null
-        return runCatching { value.asString }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 }
 
