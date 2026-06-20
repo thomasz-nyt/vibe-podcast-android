@@ -10,6 +10,72 @@ import java.util.Locale
 
 class RssParser {
 
+    fun parsePodcast(inputStream: InputStream, feedUrl: String): PodcastFeedMetadata {
+        val factory = XmlPullParserFactory.newInstance()
+        val parser = factory.newPullParser()
+        parser.setInput(inputStream, null)
+
+        var inChannel = false
+        var inItem = false
+        var currentTag: String? = null
+        val currentText = StringBuilder()
+        var title = ""
+        var author = ""
+        var imageUrl: String? = null
+
+        var eventType = parser.eventType
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            when (eventType) {
+                XmlPullParser.START_TAG -> {
+                    currentTag = parser.name
+                    when (currentTag) {
+                        "channel", "feed" -> inChannel = true
+                        "item", "entry" -> inItem = true
+                        "itunes:image" -> if (inChannel && !inItem) {
+                            imageUrl = parser.getAttributeValue(null, "href") ?: imageUrl
+                        }
+                        "image" -> if (inChannel && !inItem) {
+                            parser.getAttributeValue(null, "href")?.let { imageUrl = it }
+                        }
+                        "media:thumbnail" -> if (inChannel && !inItem) {
+                            imageUrl = parser.getAttributeValue(null, "url") ?: imageUrl
+                        }
+                    }
+                }
+
+                XmlPullParser.TEXT -> {
+                    if (inChannel && !inItem && currentTag != null) {
+                        currentText.append(parser.text)
+                    }
+                }
+
+                XmlPullParser.END_TAG -> {
+                    if (inChannel && !inItem) {
+                        when (parser.name) {
+                            "title" -> if (title.isBlank()) title = currentText.toString().trim()
+                            "itunes:author", "author", "name" ->
+                                if (author.isBlank()) author = currentText.toString().trim()
+                            "url" -> if (imageUrl.isNullOrBlank()) imageUrl = currentText.toString().trim()
+                        }
+                    }
+                    when (parser.name) {
+                        "item", "entry" -> inItem = false
+                        "channel", "feed" -> inChannel = false
+                    }
+                    currentText.clear()
+                    currentTag = null
+                }
+            }
+            eventType = parser.next()
+        }
+
+        return PodcastFeedMetadata(
+            title = title.ifBlank { feedUrl },
+            author = author,
+            artworkUrl = imageUrl?.takeIf { it.isNotBlank() },
+        )
+    }
+
     fun parseEpisodes(inputStream: InputStream, podcastId: String): List<Episode> {
         val factory = XmlPullParserFactory.newInstance()
         val parser = factory.newPullParser()
@@ -153,3 +219,9 @@ class RssParser {
         }
     }
 }
+
+data class PodcastFeedMetadata(
+    val title: String,
+    val author: String,
+    val artworkUrl: String?,
+)

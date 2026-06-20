@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PlaylistAdd
+import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material3.AlertDialog
@@ -74,6 +75,7 @@ import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.domain.model.PodcastQueue
 import com.podcastplayer.app.presentation.viewmodel.OpmlResult
 import com.podcastplayer.app.presentation.viewmodel.PodcastUiState
+import com.podcastplayer.app.ui.theme.JetBrainsMono
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -87,6 +89,7 @@ fun PodcastListScreen(
     @Suppress("UNUSED_PARAMETER") onOpenDownloads: () -> Unit,
     onPlayQueue: () -> Unit,
     onAddFromUrl: (String) -> Unit = {},
+    onAddFeed: (String) -> Unit = {},
     onExportOpml: () -> Unit = {},
     onImportOpml: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -213,6 +216,15 @@ fun PodcastListScreen(
                         onClick = {
                             focusManager.clearFocus()
                             onAddFromUrl(pastedUrl)
+                        },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                } else if (pastedUrl != null) {
+                    RssFeedShortcutCard(
+                        url = pastedUrl,
+                        onClick = {
+                            focusManager.clearFocus()
+                            onAddFeed(pastedUrl)
                         },
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
@@ -404,6 +416,49 @@ fun PodcastListScreen(
             },
             onDismiss = { queuePickerPodcast = null },
         )
+    }
+}
+
+@Composable
+private fun RssFeedShortcutCard(
+    url: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+            .background(colors.primaryContainer)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.RssFeed,
+            contentDescription = null,
+            tint = colors.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Subscribe from this RSS feed",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.onSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = url,
+                fontFamily = JetBrainsMono,
+                fontSize = 10.5.sp,
+                color = colors.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

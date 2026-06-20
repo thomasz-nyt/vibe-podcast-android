@@ -22,7 +22,7 @@ class SavedPodcastsStorage(context: Context) {
 
     suspend fun save(podcast: Podcast) {
         mutex.withLock {
-            val updated = (_savedPodcasts.value + podcast).distinctBy { it.id }
+            val updated = mergeDistinct(_savedPodcasts.value + podcast)
             persist(updated)
         }
     }
@@ -36,7 +36,7 @@ class SavedPodcastsStorage(context: Context) {
 
     suspend fun saveAll(podcasts: List<Podcast>) {
         mutex.withLock {
-            val updated = (_savedPodcasts.value + podcasts).distinctBy { it.id }
+            val updated = mergeDistinct(_savedPodcasts.value + podcasts)
             persist(updated)
         }
     }
@@ -64,6 +64,18 @@ class SavedPodcastsStorage(context: Context) {
         val migrated = list.map { it.copy(artworkUrl = upgradeITunesArtwork(it.artworkUrl)) }
         prefs.edit().putString(KEY_PODCASTS, gson.toJson(migrated)).apply()
         _savedPodcasts.value = migrated
+    }
+
+    private fun mergeDistinct(list: List<Podcast>): List<Podcast> {
+        val seenIds = mutableSetOf<String>()
+        val seenFeeds = mutableSetOf<String>()
+        return list.filter { podcast ->
+            val idKey = podcast.id
+            val feedKey = podcast.feedUrl?.trim()?.lowercase()
+            val idNew = seenIds.add(idKey)
+            val feedNew = feedKey == null || seenFeeds.add(feedKey)
+            idNew && feedNew
+        }
     }
 
     private fun load(): List<Podcast> {

@@ -58,6 +58,14 @@ class UrlDownloadViewModel(application: Application) : AndroidViewModel(applicat
             initialValue = emptyList(),
         )
 
+    /** Failed/canceled URL downloads that should stay visible until retried or deleted. */
+    val needsAttentionDownloads: StateFlow<List<UrlDownloadEntity>> =
+        repository.observeNeedsAttention().stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = emptyList(),
+        )
+
     /**
      * Begin metadata extraction for [rawUrl]. Called when the user opens the
      * AddFromUrl screen with a URL (paste, share, or dedicated input).
@@ -111,6 +119,15 @@ class UrlDownloadViewModel(application: Application) : AndroidViewModel(applicat
 
     fun deleteDownload(id: String) {
         viewModelScope.launch { repository.delete(id) }
+    }
+
+    fun retryDownload(id: String) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            if (repository.retry(id)) {
+                UrlDownloadService.startPump(app)
+            }
+        }
     }
 
     fun cancelDownload(id: String) {

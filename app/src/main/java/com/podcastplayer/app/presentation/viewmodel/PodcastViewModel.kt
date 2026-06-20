@@ -145,6 +145,9 @@ class PodcastViewModel(
     private val _opmlResult = MutableStateFlow<OpmlResult?>(null)
     val opmlResult: StateFlow<OpmlResult?> = _opmlResult.asStateFlow()
 
+    private val _feedPreviewState = MutableStateFlow<FeedPreviewState>(FeedPreviewState.Idle)
+    val feedPreviewState: StateFlow<FeedPreviewState> = _feedPreviewState.asStateFlow()
+
     private var downloadsJob: Job? = null
     private var savedJob: Job? = null
     private var progressJob: Job? = null
@@ -256,6 +259,30 @@ class PodcastViewModel(
 
     fun startDownload(episode: Episode) {
         if (_downloadProgress.value.containsKey(episode.id)) return
+        if (com.podcastplayer.app.data.repository.UrlSource.classify(episode.audioUrl) ==
+            com.podcastplayer.app.data.repository.UrlSource.YOUTUBE
+        ) {
+            val repository = urlDownloadRepository ?: run {
+                _downloadError.value = "YouTube downloader is not available."
+                return
+            }
+            _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
+            viewModelScope.launch {
+                repository.enqueue(
+                    rawUrl = episode.audioUrl,
+                    mediaType = episode.mediaType,
+                    prefetchedMetadata = com.podcastplayer.app.data.repository.UrlMetadata(
+                        title = episode.title,
+                        uploader = episode.description,
+                        thumbnailUrl = episode.imageUrl,
+                        durationMs = episode.duration,
+                    ),
+                )
+                repository.startPump()
+                _downloadProgress.value = _downloadProgress.value - episode.id
+            }
+            return
+        }
         _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
         // Surface the podcast title to DownloadManager so the MediaStore display
         // name reads as "<podcast> - <episode>.mp3" when browsed from VLC / Files.
@@ -327,6 +354,71 @@ class PodcastViewModel(
 
     fun savePodcast(podcast: Podcast) {
         viewModelScope.launch { savedPodcastsStorage.save(podcast) }
+    }
+
+    fun loadFeedPreview(feedUrl: String) {
+        val normalized = feedUrl.trim()
+        if (normalized.isBlank()) {
+            _feedPreviewState.value = FeedPreviewState.Idle
+            return
+        }
+        if (!normalized.startsWith("http://", ignoreCase = true) &&
+            !normalized.startsWith("https://", ignoreCase = true)
+        ) {
+            _feedPreviewState.value = FeedPreviewState.Error("Enter a valid RSS feed URL.")
+            return
+        }
+        viewModelScope.launch {
+            _feedPreviewState.value = FeedPreviewState.Loading(normalized)
+            if (com.podcastplayer.app.data.repository.UrlSource.classify(normalized) ==
+                com.podcastplayer.app.data.repository.UrlSource.YOUTUBE
+            ) {
+                val metadata = urlDownloadRepository?.fetchYoutubeSubscriptionMetadata(normalized)
+                if (metadata == null) {
+                    _feedPreviewState.value = FeedPreviewState.Error(
+                        "Could not read that YouTube playlist or channel.",
+                    )
+                    return@launch
+                }
+                _feedPreviewState.value = FeedPreviewState.Loaded(
+                    Podcast(
+                        id = "youtube:${
+                            com.podcastplayer.app.data.repository.UrlValidator.stableId(
+                                normalized,
+                                "subscription",
+                            )
+                        }",
+                        title = metadata.title,
+                        artist = metadata.uploader.orEmpty(),
+                        artworkUrl = metadata.thumbnailUrl,
+                        feedUrl = normalized,
+                    )
+                )
+                return@launch
+            }
+            repository.getPodcastFromFeed(normalized).fold(
+                onSuccess = { podcast ->
+                    _feedPreviewState.value = FeedPreviewState.Loaded(podcast)
+                },
+                onFailure = { error ->
+                    _feedPreviewState.value = FeedPreviewState.Error(
+                        error.message ?: "Could not read that feed.",
+                    )
+                },
+            )
+        }
+    }
+
+    fun confirmFeedPreview() {
+        val podcast = (_feedPreviewState.value as? FeedPreviewState.Loaded)?.podcast ?: return
+        viewModelScope.launch {
+            savedPodcastsStorage.save(podcast)
+            _feedPreviewState.value = FeedPreviewState.Saved(podcast)
+        }
+    }
+
+    fun resetFeedPreview() {
+        _feedPreviewState.value = FeedPreviewState.Idle
     }
 
     fun removeSavedPodcast(podcastId: String) {
@@ -496,4 +588,12 @@ sealed class OpmlResult {
     data class ExportSuccess(val podcastCount: Int, val queueCount: Int) : OpmlResult()
     data class ImportSuccess(val podcastCount: Int, val queueCount: Int) : OpmlResult()
     data class Error(val message: String) : OpmlResult()
+}
+
+sealed class FeedPreviewState {
+    data object Idle : FeedPreviewState()
+    data class Loading(val url: String) : FeedPreviewState()
+    data class Loaded(val podcast: Podcast) : FeedPreviewState()
+    data class Saved(val podcast: Podcast) : FeedPreviewState()
+    data class Error(val message: String) : FeedPreviewState()
 }

@@ -72,6 +72,13 @@ private object Routes {
 
     fun addUrl(rawUrl: String? = null): String =
         if (rawUrl.isNullOrBlank()) AddUrlBase else "$AddUrlBase?$UrlArg=${Uri.encode(rawUrl)}"
+
+    const val AddFeedBase = "add-feed"
+    const val FeedUrlArg = "feedUrl"
+    const val AddFeedPattern = "$AddFeedBase?$FeedUrlArg={$FeedUrlArg}"
+
+    fun addFeed(rawUrl: String? = null): String =
+        if (rawUrl.isNullOrBlank()) AddFeedBase else "$AddFeedBase?$FeedUrlArg=${Uri.encode(rawUrl)}"
 }
 
 @Composable
@@ -173,7 +180,14 @@ fun PodcastNavHost(
     // we navigate to the AddFromUrl screen and clear the slot so we don't loop.
     LaunchedEffect(sharedUrl) {
         val url = sharedUrl ?: return@LaunchedEffect
-        navController.navigate(Routes.addUrl(url)) {
+        val route = if (com.podcastplayer.app.data.repository.UrlSource.classify(url) ==
+            com.podcastplayer.app.data.repository.UrlSource.OTHER
+        ) {
+            Routes.addFeed(url)
+        } else {
+            Routes.addUrl(url)
+        }
+        navController.navigate(route) {
             launchSingleTop = true
         }
         onSharedUrlConsumed()
@@ -229,6 +243,7 @@ fun PodcastNavHost(
                     val currentArtworkUrl by playerViewModel.currentArtworkUrl.collectAsState()
                     val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
                     val urlInFlight by urlDownloadViewModel.inFlightDownloads.collectAsState()
+                    val urlNeedsAttention by urlDownloadViewModel.needsAttentionDownloads.collectAsState()
 
                     val urlRepository = remember(context) {
                         com.podcastplayer.app.data.repository.UrlDownloadRepository(context)
@@ -239,6 +254,7 @@ fun PodcastNavHost(
                         continueListening = continueListening,
                         urlDownloads = urlDownloads,
                         urlInFlight = urlInFlight,
+                        urlNeedsAttention = urlNeedsAttention,
                         currentEpisode = currentEpisode,
                         currentArtworkUrl = currentArtworkUrl,
                         playerState = playerState,
@@ -247,6 +263,7 @@ fun PodcastNavHost(
                             navController.navigate(Routes.episodes(podcast.id))
                         },
                         onOpenSearch = { navController.navigate(Routes.Search) },
+                        onAddFeed = { navController.navigate(Routes.addFeed()) },
                         onAddFromUrl = { navController.navigate(Routes.addUrl()) },
                         onPlayUrlDownload = { entity ->
                             val episode = urlRepository.toEpisode(entity)
@@ -257,6 +274,7 @@ fun PodcastNavHost(
                         },
                         onDeleteUrlDownload = { id -> urlDownloadViewModel.deleteDownload(id) },
                         onCancelUrlDownload = { id -> urlDownloadViewModel.cancelDownload(id) },
+                        onRetryUrlDownload = { id -> urlDownloadViewModel.retryDownload(id) },
                         onPlayEpisode = { episode, artwork ->
                             playerViewModel.playEpisode(episode, artwork)
                             navController.navigate(Routes.Player)
@@ -300,6 +318,31 @@ fun PodcastNavHost(
                     )
                 }
 
+                composable(
+                    route = Routes.AddFeedPattern,
+                    arguments = listOf(
+                        navArgument(Routes.FeedUrlArg) {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        }
+                    )
+                ) { backStackEntry ->
+                    val incomingUrl = backStackEntry.arguments?.getString(Routes.FeedUrlArg).orEmpty()
+                    val feedPreviewState by podcastViewModel.feedPreviewState.collectAsState()
+
+                    AddFeedScreen(
+                        initialUrl = incomingUrl,
+                        state = feedPreviewState,
+                        onLoad = { podcastViewModel.loadFeedPreview(it) },
+                        onSubscribe = { podcastViewModel.confirmFeedPreview() },
+                        onBack = {
+                            podcastViewModel.resetFeedPreview()
+                            navController.popBackStack(route = Routes.Home, inclusive = false)
+                        },
+                    )
+                }
+
                 composable(Routes.Search) {
                     val scope = rememberCoroutineScope()
                     val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
@@ -331,6 +374,9 @@ fun PodcastNavHost(
                         },
                         onAddFromUrl = { rawUrl ->
                             navController.navigate(Routes.addUrl(rawUrl))
+                        },
+                        onAddFeed = { rawUrl ->
+                            navController.navigate(Routes.addFeed(rawUrl))
                         },
                         onExportOpml = { exportLauncher.launch("vibe-podcasts.opml") },
                         onImportOpml = {
@@ -428,6 +474,7 @@ fun PodcastNavHost(
                     val scope = rememberCoroutineScope()
                     val podcastDownloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
                     val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
+                    val failedUrlDownloads by urlDownloadViewModel.needsAttentionDownloads.collectAsState()
                     // Raw entities give us fileSize, which the UI flows above don't carry.
                     val podcastEntities by produceState<List<com.podcastplayer.app.data.local.DownloadedEpisodeEntity>>(
                         initialValue = emptyList(),
@@ -479,6 +526,7 @@ fun PodcastNavHost(
 
                     DownloadsScreen(
                         entries = entries,
+                        failedUrlDownloads = failedUrlDownloads,
                         totalBytes = totalBytes,
                         onPlay = { entry ->
                             playerViewModel.playEpisode(entry.episode, entry.artworkUrl)
@@ -497,6 +545,8 @@ fun PodcastNavHost(
                                 }
                             }
                         },
+                        onRetryUrlDownload = { id -> urlDownloadViewModel.retryDownload(id) },
+                        onDeleteUrlDownload = { id -> urlDownloadViewModel.deleteDownload(id) },
                         onDeleteAll = {
                             scope.launch {
                                 podcastViewModel.deleteAllDownloads()

@@ -29,6 +29,8 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RssFeed
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -65,15 +67,18 @@ fun HomeScreen(
     continueListening: List<ContinueListeningUi>,
     urlDownloads: List<UrlDownloadEntity>,
     urlInFlight: List<UrlDownloadEntity>,
+    urlNeedsAttention: List<UrlDownloadEntity>,
     currentEpisode: Episode?,
     currentArtworkUrl: String?,
     playerState: PlayerState,
     onOpenPodcast: (Podcast) -> Unit,
     onOpenSearch: () -> Unit,
+    onAddFeed: () -> Unit,
     onAddFromUrl: () -> Unit,
     onPlayUrlDownload: (UrlDownloadEntity) -> Unit,
     onDeleteUrlDownload: (String) -> Unit,
     onCancelUrlDownload: (String) -> Unit,
+    onRetryUrlDownload: (String) -> Unit,
     onPlayEpisode: (Episode, String?) -> Unit,
     onPlayPause: () -> Unit,
     onOpenPlayer: () -> Unit,
@@ -92,7 +97,7 @@ fun HomeScreen(
             HomeHeader(now = now)
 
             // Quick-action row: "Add from URL" entry point.
-            QuickActionRow(onAddFromUrl = onAddFromUrl)
+            QuickActionRow(onAddFeed = onAddFeed, onAddFromUrl = onAddFromUrl)
 
             // Currently downloading items, if any.
             if (urlInFlight.isNotEmpty()) {
@@ -100,6 +105,16 @@ fun HomeScreen(
                 InFlightColumn(
                     items = urlInFlight,
                     onCancel = onCancelUrlDownload,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
+            if (urlNeedsAttention.isNotEmpty()) {
+                SectionHeader(label = "Needs attention")
+                FailedUrlColumn(
+                    items = urlNeedsAttention,
+                    onRetry = onRetryUrlDownload,
+                    onDelete = onDeleteUrlDownload,
                 )
                 Spacer(Modifier.height(4.dp))
             }
@@ -128,7 +143,7 @@ fun HomeScreen(
                 Spacer(Modifier.height(4.dp))
             }
 
-            if (subscriptions.isEmpty() && urlDownloads.isEmpty() && urlInFlight.isEmpty()) {
+            if (subscriptions.isEmpty() && urlDownloads.isEmpty() && urlInFlight.isEmpty() && urlNeedsAttention.isEmpty()) {
                 VibeEmptyState(
                     icon = Icons.Outlined.Search,
                     title = "No subscriptions yet",
@@ -198,13 +213,24 @@ private fun HomeHeader(now: LocalDateTime) {
 
 /** Quick-actions strip directly under the greeting. Currently just "Add from URL" (issue #33). */
 @Composable
-private fun QuickActionRow(onAddFromUrl: () -> Unit) {
+private fun QuickActionRow(onAddFeed: () -> Unit, onAddFromUrl: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        VibeChip(
+            label = "Add show",
+            onClick = onAddFeed,
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Outlined.RssFeed,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                )
+            },
+        )
         VibeChip(
             label = "Add from URL",
             onClick = onAddFromUrl,
@@ -469,6 +495,105 @@ private fun UrlDownloadCard(
                 color = colors.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Failed/canceled URL saves remain visible so the user can retry or delete them. */
+@Composable
+private fun FailedUrlColumn(
+    items: List<UrlDownloadEntity>,
+    onRetry: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items.forEach { item ->
+            FailedUrlCard(
+                item = item,
+                onRetry = { onRetry(item.id) },
+                onDelete = { onDelete(item.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun FailedUrlCard(
+    item: UrlDownloadEntity,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(colors.surface)
+            .border(1.dp, colors.outline, RoundedCornerShape(14.dp))
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(
+                model = item.thumbnailUrl,
+                contentDescription = item.title,
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surfaceVariant),
+                placeholder = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                error = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+                fallback = androidx.compose.ui.res.painterResource(R.drawable.ic_artwork_placeholder),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 17.sp,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = item.errorMessage ?: item.status.lowercase().replaceFirstChar { it.uppercase() },
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            VibeChip(
+                label = "Retry",
+                onClick = onRetry,
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                    )
+                },
+            )
+            VibeChip(
+                label = "Delete",
+                onClick = onDelete,
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                    )
+                },
             )
         }
     }

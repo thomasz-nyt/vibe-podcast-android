@@ -1,5 +1,10 @@
 package com.podcastplayer.app.presentation.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,10 +31,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -50,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -103,6 +111,7 @@ fun EpisodeListScreen(
         savedPodcasts.firstOrNull { it.id == podcast?.id }?.autoDownload == true
     }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     if (isLandscape) {
         EpisodeListLandscape(
@@ -138,6 +147,26 @@ fun EpisodeListScreen(
                     eyebrow = podcast?.artist,
                     onBack = onBack,
                     actions = {
+                        if (!podcast?.feedUrl.isNullOrBlank()) {
+                            VibeCircleIconButton(
+                                icon = Icons.Outlined.ContentCopy,
+                                description = "Copy feed URL",
+                                onClick = { copyFeedUrl(context, podcast?.feedUrl.orEmpty()) },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            VibeCircleIconButton(
+                                icon = Icons.Outlined.Share,
+                                description = "Share feed URL",
+                                onClick = {
+                                    shareFeedUrl(
+                                        context = context,
+                                        title = podcast?.title.orEmpty(),
+                                        feedUrl = podcast?.feedUrl.orEmpty(),
+                                    )
+                                },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
                         VibeCircleIconButton(
                             icon = Icons.Outlined.Refresh,
                             description = "Refresh episodes",
@@ -234,8 +263,12 @@ fun EpisodeListScreen(
                                         isCompleted = isCompleted,
                                         playbackProgress = playbackProgress,
                                         onClick = {
-                                            playerViewModel.playEpisode(episode, podcast?.artworkUrl)
-                                            onPlayEpisode()
+                                            if (episode.shouldOpenExternally()) {
+                                                openExternalUrl(context, episode.audioUrl)
+                                            } else {
+                                                playerViewModel.playEpisode(episode, podcast?.artworkUrl)
+                                                onPlayEpisode()
+                                            }
                                         },
                                         onDownload = { podcastViewModel.startDownload(episode) },
                                         onDelete = {
@@ -880,4 +913,32 @@ private fun formatDuration(ms: Long): String {
     val seconds = totalSeconds % 60
     return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
     else "%d:%02d".format(minutes, seconds)
+}
+
+private fun copyFeedUrl(context: Context, feedUrl: String) {
+    if (feedUrl.isBlank()) return
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("Podcast RSS feed", feedUrl))
+}
+
+private fun shareFeedUrl(context: Context, title: String, feedUrl: String) {
+    if (feedUrl.isBlank()) return
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title.ifBlank { "Podcast RSS feed" })
+        putExtra(Intent.EXTRA_TEXT, feedUrl)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share RSS feed"))
+}
+
+private fun Episode.shouldOpenExternally(): Boolean {
+    return localPath.isNullOrBlank() &&
+        com.podcastplayer.app.data.repository.UrlSource.classify(audioUrl) ==
+        com.podcastplayer.app.data.repository.UrlSource.YOUTUBE
+}
+
+private fun openExternalUrl(context: Context, url: String) {
+    if (url.isBlank()) return
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    context.startActivity(intent)
 }

@@ -44,6 +44,12 @@ interface UrlDownloadDao {
     @Query("UPDATE url_downloads SET status = :status, errorMessage = :error WHERE id = :id")
     suspend fun markFailed(id: String, status: String, error: String?)
 
+    @Query("UPDATE url_downloads SET status = :status, progressPercent = :progress, errorMessage = :error WHERE id = :id")
+    suspend fun resetForRetry(id: String, status: String, progress: Float, error: String?)
+
+    @Query("UPDATE url_downloads SET status = :toStatus, progressPercent = :progress, errorMessage = :error WHERE status IN (:fromStatuses)")
+    suspend fun resetStatuses(fromStatuses: List<String>, toStatus: String, progress: Float, error: String?)
+
     @Query("DELETE FROM url_downloads WHERE id = :id")
     suspend fun deleteById(id: String)
 
