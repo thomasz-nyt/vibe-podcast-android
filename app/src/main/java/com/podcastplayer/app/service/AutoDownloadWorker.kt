@@ -16,6 +16,9 @@ import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.PodcastRepository
+import com.podcastplayer.app.data.repository.UrlDownloadRepository
+import com.podcastplayer.app.data.repository.UrlMetadata
+import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import java.util.concurrent.TimeUnit
@@ -122,9 +125,11 @@ class AutoDownloadWorker(
 
             val repository = PodcastRepository(iTunesApi.create(), RssParser())
             val downloadManager = DownloadManager(context)
+            val urlDownloadRepository = UrlDownloadRepository(context)
             val downloadedDao = DatabaseProvider.getDatabase(context).downloadedEpisodeDao()
 
             val cutoffMs = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(MAX_AGE_DAYS)
+            var queuedUrlDownloads = false
 
             for (podcast in candidates) {
                 val feedUrl = podcast.feedUrl ?: continue
@@ -141,12 +146,27 @@ class AutoDownloadWorker(
                 }
 
                 for (episode in freshEpisodes) {
+                    if (UrlSource.classify(episode.audioUrl) == UrlSource.YOUTUBE) {
+                        urlDownloadRepository.enqueue(
+                            rawUrl = episode.audioUrl,
+                            mediaType = episode.mediaType,
+                            prefetchedMetadata = UrlMetadata(
+                                title = episode.title,
+                                uploader = episode.description,
+                                thumbnailUrl = episode.imageUrl,
+                                durationMs = episode.duration,
+                            ),
+                        )
+                        queuedUrlDownloads = true
+                        continue
+                    }
                     if (downloadedDao.isEpisodeDownloaded(episode.id)) continue
                     val withArtwork = ensureArtwork(episode, podcast)
                     // Result is ignored — periodic work; we'll try again next interval.
                     downloadManager.downloadEpisode(withArtwork, podcastTitle = podcast.title)
                 }
             }
+            if (queuedUrlDownloads) urlDownloadRepository.startPump()
         }
 
         private fun ensureArtwork(episode: Episode, podcast: Podcast): Episode {
