@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
-import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.presentation.viewmodel.FeedPreviewState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
@@ -73,7 +72,7 @@ fun AddFeedScreen(
     ) {
         VibeTopBar(
             title = "Add show",
-            eyebrow = "RSS or YouTube",
+            eyebrow = "RSS",
             onBack = onBack,
         )
 
@@ -107,7 +106,7 @@ fun AddFeedScreen(
                     decorationBox = { inner ->
                         if (url.isBlank()) {
                             Text(
-                                text = "RSS feed or YouTube playlist/channel URL",
+                                text = "RSS feed URL",
                                 color = colors.onSurfaceVariant,
                                 fontSize = 13.sp,
                                 fontFamily = JetBrainsMono,
@@ -156,7 +155,7 @@ private fun FeedHint() {
     VibeEmptyState(
         icon = Icons.Outlined.RssFeed,
         title = "Paste a feed or video podcast",
-        subtitle = "Use RSS for missing podcasts, or a YouTube playlist/channel for this sideload build.",
+        subtitle = "Use an RSS feed to add a podcast that search didn't find.",
         modifier = Modifier.padding(horizontal = 20.dp),
     )
 }
@@ -192,11 +191,7 @@ private fun FeedLoading() {
 private fun FeedPreview(state: FeedPreviewState.Loaded, onSubscribe: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val podcast = state.podcast
-    val sourceLabel = if (UrlSource.classify(podcast.feedUrl.orEmpty()) == UrlSource.YOUTUBE) {
-        "YOUTUBE"
-    } else {
-        "RSS FEED"
-    }
+    val sourceLabel = "RSS FEED"
     VibeSurface(
         modifier = Modifier
             .fillMaxWidth()

@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -263,12 +262,8 @@ fun EpisodeListScreen(
                                         isCompleted = isCompleted,
                                         playbackProgress = playbackProgress,
                                         onClick = {
-                                            if (episode.shouldOpenExternally()) {
-                                                openExternalUrl(context, episode.audioUrl)
-                                            } else {
-                                                playerViewModel.playEpisode(episode, podcast?.artworkUrl)
-                                                onPlayEpisode()
-                                            }
+                                            playerViewModel.playEpisode(episode, podcast?.artworkUrl)
+                                            onPlayEpisode()
                                         },
                                         onDownload = { podcastViewModel.startDownload(episode) },
                                         onDelete = {
@@ -929,16 +924,4 @@ private fun shareFeedUrl(context: Context, title: String, feedUrl: String) {
         putExtra(Intent.EXTRA_TEXT, feedUrl)
     }
     context.startActivity(Intent.createChooser(intent, "Share RSS feed"))
-}
-
-private fun Episode.shouldOpenExternally(): Boolean {
-    return localPath.isNullOrBlank() &&
-        com.podcastplayer.app.data.repository.UrlSource.classify(audioUrl) ==
-        com.podcastplayer.app.data.repository.UrlSource.YOUTUBE
-}
-
-private fun openExternalUrl(context: Context, url: String) {
-    if (url.isBlank()) return
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-    context.startActivity(intent)
 }
