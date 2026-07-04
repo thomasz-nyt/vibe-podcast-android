@@ -5,6 +5,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.podcastplayer.app.data.remote.upgradeITunesArtwork
 import com.podcastplayer.app.domain.model.Podcast
+import java.net.URI
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,8 +87,12 @@ class SavedPodcastsStorage(context: Context) {
         } catch (_: Exception) {
             return emptyList()
         }
-        val migrated = parsed.map { it.copy(artworkUrl = upgradeITunesArtwork(it.artworkUrl)) }
+        val migrated = parsed
+            .filterNot(::isLegacyYouTubeSubscription)
+            .map { it.copy(artworkUrl = upgradeITunesArtwork(it.artworkUrl)) }
         if (migrated != parsed) {
+            // Artwork and removed-provider migration share one durable write so a
+            // legacy subscription cannot reappear on the next process start.
             prefs.edit().putString(KEY_PODCASTS, gson.toJson(migrated)).apply()
         }
         return migrated
@@ -96,5 +101,20 @@ class SavedPodcastsStorage(context: Context) {
     companion object {
         private const val PREFS_NAME = "saved_podcasts"
         private const val KEY_PODCASTS = "podcasts"
+
+        internal fun isLegacyYouTubeSubscription(podcast: Podcast): Boolean {
+            if (podcast.id.startsWith("youtube:", ignoreCase = true)) return true
+            val uri = podcast.feedUrl?.trim()?.let { runCatching { URI(it) }.getOrNull() } ?: return false
+            val host = uri.host?.lowercase()?.removePrefix("www.") ?: return false
+            if (host != "youtube.com" && !host.endsWith(".youtube.com")) return false
+            val path = uri.path.orEmpty().lowercase()
+            val query = uri.rawQuery.orEmpty().lowercase()
+            return path.startsWith("/channel/") ||
+                path.startsWith("/playlist") ||
+                path.startsWith("/feeds/videos.xml") ||
+                path.startsWith("/@") ||
+                "list=" in query ||
+                "channel_id=" in query
+        }
     }
 }
