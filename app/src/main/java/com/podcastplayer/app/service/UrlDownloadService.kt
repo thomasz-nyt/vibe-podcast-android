@@ -21,6 +21,7 @@ import com.podcastplayer.app.domain.model.MediaType
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
@@ -54,6 +55,17 @@ class UrlDownloadService : Service() {
     private val pumpMutex = Mutex()
     @Volatile private var stopRequested = false
 
+    // Last integer percent (0-100) reported per download id, so the yt-dlp progress
+    // callback (which fires many times per second) only does work when the rounded
+    // percent actually changes.
+    private val lastReportedPercent = ConcurrentHashMap<String, Int>()
+
+    // Serializes the Room write + notification update for progress ticks so they always
+    // apply in the order they were emitted, even though the yt-dlp callback launches a
+    // new coroutine per tick.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val progressDispatcher = Dispatchers.IO.limitedParallelism(1)
+
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
@@ -83,6 +95,7 @@ class UrlDownloadService : Service() {
     private suspend fun pumpQueue() {
         pumpMutex.withLock {
             repository.requeueInterrupted()
+            sweepOrphanWorkdirs()
             while (!stopRequested) {
                 val nextId = nextQueuedId() ?: break
                 processOne(nextId)
@@ -90,6 +103,36 @@ class UrlDownloadService : Service() {
             // Nothing left to do — stop the service.
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        }
+    }
+
+    /**
+     * Delete per-id workdirs (`<downloadDir>/<id>/`) left behind by a process death
+     * mid-download (crash, OOM kill) that skipped [processOne]'s `finally` cleanup.
+     * Runs once at the start of a pump, before any [processOne] call in this pump
+     * begins, so it can never race with an in-progress download's own workdir.
+     *
+     * A workdir is swept when its id has no row in an active state (QUEUED /
+     * EXTRACTING_METADATA / DOWNLOADING — [requeueInterrupted] above already reset any
+     * rows that were interrupted mid-flight back to QUEUED) AND it isn't referenced by
+     * a COMPLETED row's `localPath` (the normal completion path always publishes to
+     * MediaStore or renames the file out to `<downloadDir>/<id>.<ext>`, i.e. outside the
+     * workdir — but this guards the rare case where that rename failed).
+     */
+    private suspend fun sweepOrphanWorkdirs() {
+        val outDir = repository.downloadDir
+        val dirs = outDir.listFiles { file -> file.isDirectory } ?: return
+        if (dirs.isEmpty()) return
+
+        val byId = repository.observeAll().first().associateBy { it.id }
+        for (dir in dirs) {
+            val row = byId[dir.name]
+            if (row != null && row.status in ACTIVE_STATUSES) continue
+            val referencedByCompleted = row != null &&
+                row.status == UrlDownloadStatus.COMPLETED.name &&
+                row.localPath?.let { File(it).parentFile == dir } == true
+            if (referencedByCompleted) continue
+            cleanupWorkdir(dir)
         }
     }
 
@@ -106,6 +149,13 @@ class UrlDownloadService : Service() {
         val entity = repository.get(id) ?: return
         val processId = "url-dl-$id"
         processIds[id] = processId
+        lastReportedPercent.remove(id)
+
+        val outDir = repository.downloadDir
+        val workdir = File(outDir, id)
+        // Set when a completed row's file ends up inside `workdir` (only happens if the
+        // rename-to-final-name below fails) so cleanup never deletes a referenced file.
+        var keepFile: File? = null
 
         try {
             // Mark extracting (a quick metadata pass) — repo already populated metadata
@@ -118,23 +168,26 @@ class UrlDownloadService : Service() {
                 return
             }
 
-            val outDir = repository.downloadDir
-            val workdir = File(outDir, id).apply { mkdirs() }
-
+            workdir.mkdirs()
             val request = repository.buildDownloadRequest(entity, workdir)
 
             repository.markDownloading(id, 0f)
 
-            // yt-dlp progress: 0..100, eta seconds, raw line.
+            // yt-dlp progress: 0..100, eta seconds, raw line. Fires many times per
+            // second; only act when the rounded percent actually changes, and run the
+            // Room write + notification update on a serialized dispatcher so ticks are
+            // applied in order (the callback launches a new coroutine per tick, which
+            // could otherwise complete out of order and make progress jump backward).
             YoutubeDL.getInstance().execute(request, processId) { progress, _, _ ->
-                // Coroutine launch so we don't block the streaming process.
-                serviceScope.launch {
+                val percent = progress.toInt().coerceIn(0, 100)
+                if (lastReportedPercent.put(id, percent) == percent) return@execute
+                serviceScope.launch(progressDispatcher) {
                     repository.markDownloading(id, progress)
                     updateNotification(
                         buildProgressNotification(
                             title = entity.title,
                             progress = progress,
-                            status = "Downloading… ${progress.toInt()}%",
+                            status = "Downloading… $percent%",
                         )
                     )
                 }
@@ -164,11 +217,9 @@ class UrlDownloadService : Service() {
                 if (finalFile.exists()) finalFile.delete()
                 val moved = produced.renameTo(finalFile)
                 val output = if (moved) finalFile else produced
+                if (!moved) keepFile = output // still inside workdir; don't let cleanup delete it
                 repository.markCompleted(id, output.absolutePath, output.length())
             }
-            // Best-effort cleanup of leftover sidecar files.
-            workdir.listFiles()?.forEach { it.delete() }
-            workdir.delete()
 
             updateNotification(
                 buildCompletedNotification(entity.title)
@@ -179,9 +230,24 @@ class UrlDownloadService : Service() {
             Log.e(TAG, "Download $id failed", e)
             repository.markFailed(id, e.message ?: e.javaClass.simpleName)
         } finally {
+            // Runs on every path — success, failure, cancel, and early returns — so a
+            // partial/interrupted download never leaks its workdir.
+            cleanupWorkdir(workdir, keep = keepFile)
             activeJobs.remove(id)
             processIds.remove(id)
+            lastReportedPercent.remove(id)
         }
+    }
+
+    /**
+     * Delete [workdir] and everything in it, except [keep] (a file that a COMPLETED
+     * row's `localPath` still points to — only non-null in the rare case where moving
+     * the produced file out of the workdir failed). Safe to call on a dir that doesn't
+     * exist or is already empty.
+     */
+    private fun cleanupWorkdir(workdir: File, keep: File? = null) {
+        workdir.listFiles()?.forEach { file -> if (file != keep) file.delete() }
+        if (keep == null) workdir.delete()
     }
 
     /**
@@ -347,6 +413,12 @@ class UrlDownloadService : Service() {
         private const val TAG = "UrlDownloadService"
         private const val CHANNEL_ID = "url_downloads_channel"
         private const val NOTIFICATION_ID = 4242
+
+        private val ACTIVE_STATUSES = setOf(
+            UrlDownloadStatus.QUEUED.name,
+            UrlDownloadStatus.EXTRACTING_METADATA.name,
+            UrlDownloadStatus.DOWNLOADING.name,
+        )
 
         const val ACTION_START_PUMP = "com.podcastplayer.app.action.START_PUMP"
         const val ACTION_CANCEL = "com.podcastplayer.app.action.CANCEL"
