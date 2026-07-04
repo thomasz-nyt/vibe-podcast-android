@@ -107,18 +107,20 @@ Both ViewModels are scoped at the `PodcastNavHost` top level so state survives n
 ### Navigation
 **`presentation/ui/PodcastNavHost.kt`** — Navigation Compose host; defines all routes and wires ViewModels to screens.
 
-Routes:
+Routes (start destination is `"home"`):
 ```
-"home"                   → HomeScreen
-"search"                 → PodcastListScreen
-"episodes/{podcastId}"   → EpisodeListScreen
-"queue"                  → QueueScreen
-"downloads"              → DownloadsScreen
-"player"                 → PlayerScreen
-"add-url?url={url}"      → AddFromUrlScreen   (issue #33)
+"home"                       → HomeScreen
+"search"                     → PodcastListScreen
+"episodes/{podcastId}"       → EpisodeListScreen
+"queue"                      → QueueScreen
+"downloads"                  → DownloadsScreen
+"player"                     → PlayerScreen
+"settings"                   → SettingsScreen
+"add-url?url={url}"          → AddFromUrlScreen   (issue #33)
+"add-feed?feedUrl={feedUrl}" → AddFeedScreen
 ```
 
-All "back" presses pop to `"search"` (inclusive = false) rather than following the system back stack.
+Sub-screens override back to pop to `"home"` (inclusive = false) rather than following the system back stack; bottom-nav tab taps use `popUpTo(home)` + `launchSingleTop`.
 
 ### ViewModels
 **`presentation/viewmodel/PodcastViewModel.kt`** — Manages podcast search, episode list, saved podcasts, queue management, download state, and playback progress.
@@ -261,7 +263,7 @@ sealed class EpisodesUiState {
 
 | Storage | Key / File | Contents |
 |---|---|---|
-| Room DB v2 | `podcast_database` | `downloaded_episodes`, `playback_progress` |
+| Room DB v3 | `podcast_database` | `downloaded_episodes`, `playback_progress`, `url_downloads` |
 | SharedPreferences | `saved_podcasts` → `podcasts` | JSON list of saved `Podcast` objects |
 | SharedPreferences | `podcast_queues` → `queues` | JSON list of `QueuePayload` objects |
 | SharedPreferences | `player_session` | JSON of last playback session |
@@ -323,7 +325,7 @@ kapt("androidx.room:room-compiler:X.Y.Z")
 
 ## Testing
 
-No tests currently exist. When writing tests:
+JVM unit tests live under `app/src/test/` (e.g. `PodcastViewModelTest`, `PlayerViewModelTest`, `ResilientForwardingPlayerTest`, `UrlSourceTest`, `UrlValidatorTest`, `SavedPodcastsMigrationTest`). When writing tests:
 
 - Unit tests for ViewModels use `MainDispatcherRule` for coroutines
 - Use `kotlinx-coroutines-test` for `TestScope`/`runTest`
@@ -349,7 +351,7 @@ No tests currently exist. When writing tests:
 - No Hilt/Dagger — ViewModels use manual factories; consider Hilt for new features.
 - Room schema export disabled (`exportSchema` not configured, triggers kapt warning). Either add `room.schemaLocation` to kapt options or set `exportSchema = false` in `@Database`.
 - `usesCleartextTraffic="true"` in the manifest allows HTTP RSS feeds; note the security trade-off.
-- No unit test coverage currently.
+- Unit test coverage is thin; instrumented tests don't exist. See `docs/analysis-2026-07.md` for the full audit and prioritized roadmap.
 
 ---
 
