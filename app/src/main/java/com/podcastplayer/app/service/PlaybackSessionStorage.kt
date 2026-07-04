@@ -17,35 +17,58 @@ data class StoredPlaybackSession(
     val isCompleted: Boolean
 )
 
+/** Plain-data snapshot of one playlist item, captured off the [MediaItem]/[MediaMetadata]
+ *  Media3 types so it can be built on the main thread (where Player access is required)
+ *  and then serialized to JSON off-main without touching Player-adjacent objects again. */
+data class PlaybackSessionItemSnapshot(
+    val mediaId: String,
+    val uri: String,
+    val title: String?,
+    val artist: String?,
+    val description: String?,
+    val artworkUri: String?,
+)
+
+/** Plain-data snapshot of the whole playback session, ready to be JSON-serialized and
+ *  written to SharedPreferences off the main thread. [capturedAtMs] lets [save] callers
+ *  guard against an older snapshot overwriting a newer one when writes are serialized. */
+data class PlaybackSessionSnapshot(
+    val items: List<PlaybackSessionItemSnapshot>,
+    val currentIndex: Int,
+    val currentPositionMs: Long,
+    val wasPlaying: Boolean,
+    val playbackSpeed: Float,
+    val isCompleted: Boolean,
+    val capturedAtMs: Long = System.currentTimeMillis(),
+)
+
 class PlaybackSessionStorage(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun save(
-        items: List<MediaItem>,
-        currentIndex: Int,
-        currentPositionMs: Long,
-        wasPlaying: Boolean,
-        playbackSpeed: Float,
-        isCompleted: Boolean
-    ) {
-        if (items.isEmpty() || currentIndex !in items.indices) return
+    /**
+     * Serializes [snapshot] to JSON and writes it to SharedPreferences. Both steps are
+     * plain CPU/disk work with no Player access, so callers should invoke this off the
+     * main thread (see [com.podcastplayer.app.service.PlayerService]'s persist path).
+     */
+    fun save(snapshot: PlaybackSessionSnapshot) {
+        if (snapshot.items.isEmpty() || snapshot.currentIndex !in snapshot.items.indices) return
 
         val payload = JSONObject().apply {
-            put("currentIndex", currentIndex)
-            put("currentPositionMs", currentPositionMs.coerceAtLeast(0L))
-            put("wasPlaying", wasPlaying)
-            put("playbackSpeed", playbackSpeed)
-            put("isCompleted", isCompleted)
+            put("currentIndex", snapshot.currentIndex)
+            put("currentPositionMs", snapshot.currentPositionMs.coerceAtLeast(0L))
+            put("wasPlaying", snapshot.wasPlaying)
+            put("playbackSpeed", snapshot.playbackSpeed)
+            put("isCompleted", snapshot.isCompleted)
             put("items", JSONArray().apply {
-                items.forEach { item ->
+                snapshot.items.forEach { item ->
                     put(JSONObject().apply {
                         put("mediaId", item.mediaId)
-                        put("uri", item.localConfiguration?.uri?.toString().orEmpty())
-                        put("title", item.mediaMetadata.title?.toString())
-                        put("artist", item.mediaMetadata.artist?.toString())
-                        put("description", item.mediaMetadata.description?.toString())
-                        put("artworkUri", item.mediaMetadata.artworkUri?.toString())
+                        put("uri", item.uri)
+                        put("title", item.title)
+                        put("artist", item.artist)
+                        put("description", item.description)
+                        put("artworkUri", item.artworkUri)
                     })
                 }
             })

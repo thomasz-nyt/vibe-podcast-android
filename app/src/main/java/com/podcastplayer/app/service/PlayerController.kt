@@ -3,6 +3,7 @@ package com.podcastplayer.app.service
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -25,6 +26,7 @@ class PlayerController private constructor(private val context: Context) : Playb
     private val playbackSessionStorage = PlaybackSessionStorage(context)
     private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(context).playbackProgressDao() }
     private val listeners = ConcurrentHashMap<PlaybackControllerListener, Player.Listener>()
+    private val mediaTypeCache = ConcurrentHashMap<String, MediaType>()
 
     @Volatile
     private var latestPlaybackRequest = 0L
@@ -34,11 +36,15 @@ class PlayerController private constructor(private val context: Context) : Playb
     }
 
     private fun episodeToMediaItem(episode: Episode, artworkUrl: String?): MediaItem {
+        // Stash the already-known media type in the metadata extras so reading it back
+        // in mediaItemToEpisode() is a free field read instead of a contentResolver IPC.
+        val extras = Bundle().apply { putString(EXTRA_MEDIA_TYPE, episode.mediaType.tag) }
         val metadata = MediaMetadata.Builder()
             .setTitle(episode.title)
             .setArtist(episode.podcastId)
             .setDescription(episode.description)
             .setArtworkUri(artworkUrl?.let(Uri::parse))
+            .setExtras(extras)
             .build()
         val mediaUri = episode.localPath?.takeIf { episode.isDownloaded }?.let(::resolveLocalUri)
             ?: Uri.parse(episode.audioUrl)
@@ -176,12 +182,30 @@ class PlayerController private constructor(private val context: Context) : Playb
             localPath = if (isLocal) {
                 if (uri.startsWith("content://")) uri else item.localConfiguration?.uri?.path
             } else null,
-            mediaType = inferMediaType(uri),
+            mediaType = resolveMediaType(item, uri),
         )
     }
 
     private fun resolveLocalUri(localPath: String): Uri =
         if (localPath.startsWith("content://")) Uri.parse(localPath) else Uri.fromFile(File(localPath))
+
+    /**
+     * Resolve the [MediaType] for [item]/[uri] without hitting the main-thread
+     * contentResolver IPC on every call. [snapshotOf] runs on every Player event AND
+     * a 1 Hz position ticker, so this is invoked far more often than once per media item.
+     *
+     * Prefers the type stashed in the MediaMetadata extras by [episodeToMediaItem] (a
+     * free field read). Falls back to [inferMediaType] for items that didn't go through
+     * that path (e.g. restored from [PlaybackSessionStorage]), memoizing the result per
+     * URI so the resolver is hit at most once per distinct media item.
+     */
+    private fun resolveMediaType(item: MediaItem, uri: String): MediaType {
+        item.mediaMetadata.extras?.getString(EXTRA_MEDIA_TYPE)?.let { tag ->
+            return MediaType.fromTag(tag)
+        }
+        if (uri.isBlank()) return MediaType.AUDIO
+        return mediaTypeCache.getOrPut(uri) { inferMediaType(uri) }
+    }
 
     private fun inferMediaType(uri: String): MediaType {
         if (uri.startsWith("content://")) {
@@ -202,6 +226,7 @@ class PlayerController private constructor(private val context: Context) : Playb
 
     companion object {
         @Volatile private var instance: PlayerController? = null
+        private const val EXTRA_MEDIA_TYPE = "com.podcastplayer.app.mediaType"
 
         fun getInstance(context: Context): PlayerController = instance ?: synchronized(this) {
             instance ?: PlayerController(context.applicationContext).also { instance = it }
