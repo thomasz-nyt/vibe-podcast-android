@@ -5,6 +5,10 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.InputStream
 import java.text.SimpleDateFormat
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
@@ -177,20 +181,43 @@ class RssParser {
         return episodes
     }
 
+    /**
+     * Parses a `<pubDate>` value.
+     *
+     * The queue-play feature picks the *latest* unplayed episode per podcast by
+     * comparing this value, so a feed whose dates fail to parse silently falls
+     * back to feed order — normally harmless (feeds list newest-first) but wrong
+     * for feeds that don't. RFC 822 (the RSS 2.0 spec'd format) covers most
+     * feeds; the ISO-8601 fallback covers Atom-style feeds and the non-compliant
+     * RSS generators that emit ISO timestamps in `<pubDate>` anyway.
+     */
     private fun parseDate(dateString: String): Date? {
-        return try {
-            val formats = listOf(
-                "EEE, dd MMM yyyy HH:mm:ss Z",
-                "EEE, dd MMM yyyy HH:mm:ss z"
-            )
-            for (format in formats) {
-                try {
-                    val sdf = SimpleDateFormat(format, Locale.ENGLISH)
-                    return sdf.parse(dateString)
-                } catch (e: Exception) {
-                }
+        val trimmed = dateString.trim()
+        if (trimmed.isBlank()) return null
+
+        for (format in RFC_822_FORMATS) {
+            try {
+                return SimpleDateFormat(format, Locale.ENGLISH).parse(trimmed)
+            } catch (e: Exception) {
+                // Try the next format.
             }
-            null
+        }
+
+        return parseIso8601(trimmed)
+    }
+
+    private fun parseIso8601(value: String): Date? {
+        for (formatter in ISO_8601_FORMATTERS) {
+            try {
+                return Date.from(OffsetDateTime.parse(value, formatter).toInstant())
+            } catch (e: Exception) {
+                // Try the next formatter.
+            }
+        }
+        return try {
+            // No offset at all (some feeds emit naive local timestamps) — assume
+            // UTC rather than dropping the date entirely.
+            Date.from(LocalDateTime.parse(value).toInstant(ZoneOffset.UTC))
         } catch (e: Exception) {
             null
         }
@@ -217,6 +244,24 @@ class RssParser {
         } catch (e: Exception) {
             null
         }
+    }
+
+    companion object {
+        // RFC 822 (the RSS 2.0 spec's format) plus common non-compliant variants
+        // real feeds emit — some omit the weekday name entirely.
+        private val RFC_822_FORMATS = listOf(
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "EEE, dd MMM yyyy HH:mm:ss z",
+            "dd MMM yyyy HH:mm:ss Z",
+            "dd MMM yyyy HH:mm:ss z",
+        )
+
+        // XXX accepts "Z" or "+HH:MM"; XX accepts "Z" or "+HHMM" (no colon).
+        // Tried in sequence so either offset style resolves.
+        private val ISO_8601_FORMATTERS = listOf(
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.SSS]XXX", Locale.ENGLISH),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss[.SSS]XX", Locale.ENGLISH),
+        )
     }
 }
 
