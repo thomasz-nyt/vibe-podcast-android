@@ -25,26 +25,24 @@ class RssParserTest {
     private val parser = RssParser(newPullParser = { org.kxml2.io.KXmlParser() })
 
     private fun episodesFor(pubDates: List<String>): List<Episode> {
-        val items = pubDates.mapIndexed { index, pubDate ->
-            """
-            <item>
-                <title>Episode $index</title>
-                <guid>ep-$index</guid>
-                <pubDate>$pubDate</pubDate>
-                <enclosure url="https://example.com/ep$index.mp3" />
-            </item>
-            """.trimIndent()
-        }.joinToString("\n")
-
-        val xml = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <rss version="2.0">
-                <channel>
-                    <title>Test Feed</title>
-                    $items
-                </channel>
-            </rss>
-        """.trimIndent()
+        // Assembled with buildString rather than a trimIndent'd template:
+        // trimIndent runs AFTER interpolation, so interpolated zero-indent
+        // lines would stop the surrounding indentation from being stripped —
+        // leaving whitespace before <?xml?>, a fatal prolog error for a
+        // strict pull parser.
+        val xml = buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+            append("<rss version=\"2.0\"><channel><title>Test Feed</title>\n")
+            pubDates.forEachIndexed { index, pubDate ->
+                append("<item>")
+                append("<title>Episode $index</title>")
+                append("<guid>ep-$index</guid>")
+                append("<pubDate>$pubDate</pubDate>")
+                append("<enclosure url=\"https://example.com/ep$index.mp3\" />")
+                append("</item>\n")
+            }
+            append("</channel></rss>")
+        }
 
         val stream = ByteArrayInputStream(xml.toByteArray(StandardCharsets.UTF_8))
         return parser.parseEpisodes(stream, "podcast-1")
