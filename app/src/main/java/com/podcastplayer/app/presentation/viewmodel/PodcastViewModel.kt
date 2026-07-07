@@ -26,7 +26,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 class PodcastViewModel(
@@ -234,14 +239,14 @@ class PodcastViewModel(
         }
     }
 
-    private fun loadEpisodes(podcast: Podcast) {
+    private fun loadEpisodes(podcast: Podcast, forceRefresh: Boolean = false) {
         viewModelScope.launch {
             _episodesUiState.value = EpisodesUiState.Loading
             val feedUrl = podcast.feedUrl ?: run {
                 _episodesUiState.value = EpisodesUiState.Error("No feed URL available")
                 return@launch
             }
-            repository.getEpisodes(feedUrl, podcast.id).fold(
+            repository.getEpisodes(feedUrl, podcast.id, forceRefresh).fold(
                 onSuccess = { episodes ->
                     _episodesUiState.value = EpisodesUiState.Success(episodes)
                     refreshEpisodesWithDownloads()
@@ -322,10 +327,10 @@ class PodcastViewModel(
         }
     }
 
-    /** Re-fetch the RSS feed for the currently-selected podcast. */
+    /** Re-fetch the RSS feed for the currently-selected podcast, bypassing the feed cache. */
     fun refreshSelectedPodcastEpisodes() {
         val podcast = _selectedPodcast.value ?: return
-        loadEpisodes(podcast)
+        loadEpisodes(podcast, forceRefresh = true)
     }
 
     fun savePodcast(podcast: Podcast) {
@@ -465,37 +470,18 @@ class PodcastViewModel(
     }
 
     /**
-     * Build a list containing the latest unplayed episode from each podcast (queue order preserved).
+     * Build the "Play Queue" playlist per docs/specs/004-podcast-queue-play.md section 4-5:
+     * for each podcast in queue order, include ALL unplayed (non-completed) episodes,
+     * ordered oldest -> newest within that podcast. Queue order across podcasts is preserved
+     * in the flattened result. Per-podcast feed fetches run concurrently (independent network
+     * calls), bounded by [MAX_CONCURRENT_QUEUE_FEED_FETCHES].
      */
     suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
-        return withContext(Dispatchers.IO) {
-            val result = mutableListOf<Episode>()
-
-            for (podcast in podcasts) {
-                val feedUrl = podcast.feedUrl ?: continue
-
-                val episodes = repository.getEpisodes(feedUrl, podcast.id).getOrNull().orEmpty()
-                if (episodes.isEmpty()) continue
-
-                val progressByEpisodeId = playbackProgressDao.getByPodcastId(podcast.id)
-                    .associateBy { it.episodeId }
-
-                val latestUnplayed = episodes
-                    .filter { ep -> progressByEpisodeId[ep.id]?.completed != true }
-                    .maxByOrNull { it.pubDate?.time ?: Long.MIN_VALUE }
-
-                latestUnplayed?.let { episode ->
-                    val withArtwork = if (episode.imageUrl == null && podcast.artworkUrl != null) {
-                        episode.copy(imageUrl = podcast.artworkUrl)
-                    } else {
-                        episode
-                    }
-                    result.add(withArtwork)
-                }
-            }
-
-            result
-        }
+        return buildUnplayedEpisodesForQueue(
+            podcasts = podcasts,
+            fetchEpisodes = { feedUrl, podcastId -> repository.getEpisodes(feedUrl, podcastId) },
+            fetchProgress = { podcastId -> playbackProgressDao.getByPodcastId(podcastId) },
+        )
     }
 
     override fun onCleared() {
@@ -546,4 +532,69 @@ sealed class FeedPreviewState {
     data class Loaded(val podcast: Podcast) : FeedPreviewState()
     data class Saved(val podcast: Podcast) : FeedPreviewState()
     data class Error(val message: String) : FeedPreviewState()
+}
+
+/** Bound on simultaneous RSS feed fetches when building a queue playlist. */
+private const val MAX_CONCURRENT_QUEUE_FEED_FETCHES = 4
+
+/**
+ * Pure, dependency-free implementation of the "Play Queue" playlist builder (see
+ * [PodcastViewModel.buildUnplayedEpisodesForPodcastQueue]). Extracted to a top-level
+ * function — decoupled from [PodcastRepository]/[PlaybackProgressDao] — so it can be
+ * unit tested without the Context-backed storage classes [PodcastViewModel] otherwise
+ * requires (there is no Robolectric/Mockito in this project's test setup).
+ *
+ * Feed fetches for different podcasts are independent network calls, so they run
+ * concurrently (bounded by [MAX_CONCURRENT_QUEUE_FEED_FETCHES]) while queue order is
+ * preserved in the flattened result: `awaitAll()` on a `List<Deferred<T>>` returns
+ * results in the original list order, not completion order.
+ */
+internal suspend fun buildUnplayedEpisodesForQueue(
+    podcasts: List<Podcast>,
+    fetchEpisodes: suspend (feedUrl: String, podcastId: String) -> Result<List<Episode>>,
+    fetchProgress: suspend (podcastId: String) -> List<PlaybackProgressEntity>,
+): List<Episode> = withContext(Dispatchers.IO) {
+    val semaphore = Semaphore(MAX_CONCURRENT_QUEUE_FEED_FETCHES)
+    coroutineScope {
+        podcasts
+            .filter { !it.feedUrl.isNullOrBlank() }
+            .map { podcast ->
+                async {
+                    semaphore.withPermit {
+                        unplayedEpisodesForPodcast(podcast, fetchEpisodes, fetchProgress)
+                    }
+                }
+            }
+            .awaitAll()
+            .flatten()
+    }
+}
+
+/**
+ * All non-completed episodes for a single [podcast], oldest -> newest by [Episode.pubDate]
+ * (episodes with no pubDate sort last — we don't know how old they are). "Unplayed" means
+ * no playback_progress row, or a row with `completed == false`; partially-played episodes
+ * are included, per spec section 5.
+ */
+private suspend fun unplayedEpisodesForPodcast(
+    podcast: Podcast,
+    fetchEpisodes: suspend (feedUrl: String, podcastId: String) -> Result<List<Episode>>,
+    fetchProgress: suspend (podcastId: String) -> List<PlaybackProgressEntity>,
+): List<Episode> {
+    val feedUrl = podcast.feedUrl ?: return emptyList()
+    val episodes = fetchEpisodes(feedUrl, podcast.id).getOrNull().orEmpty()
+    if (episodes.isEmpty()) return emptyList()
+
+    val progressByEpisodeId = fetchProgress(podcast.id).associateBy { it.episodeId }
+
+    return episodes
+        .filter { episode -> progressByEpisodeId[episode.id]?.completed != true }
+        .sortedBy { it.pubDate?.time ?: Long.MAX_VALUE }
+        .map { episode ->
+            if (episode.imageUrl == null && podcast.artworkUrl != null) {
+                episode.copy(imageUrl = podcast.artworkUrl)
+            } else {
+                episode
+            }
+        }
 }

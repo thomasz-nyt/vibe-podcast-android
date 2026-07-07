@@ -24,6 +24,7 @@ import com.podcastplayer.app.domain.model.Episode
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -38,6 +39,15 @@ class PlayerService : MediaSessionService() {
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Main)
     private var persistJob: Job? = null
+
+    // Serializes the JSON-build + SharedPreferences write for session persistence so
+    // concurrently-launched writes (every 5s + on transitions/pause/seek) apply in
+    // submission order rather than racing on Dispatchers.IO's thread pool.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sessionWriteDispatcher = Dispatchers.IO.limitedParallelism(1)
+
+    @Volatile
+    private var lastPersistedSnapshotAtMs = 0L
 
     private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(this).playbackProgressDao() }
     private val playbackSessionStorage by lazy { PlaybackSessionStorage(this) }
@@ -149,20 +159,54 @@ class PlayerService : MediaSessionService() {
     }
 
     private fun persistPlaybackSession(isCompleted: Boolean) {
-        val p = player ?: return
+        val snapshot = captureSessionSnapshot(isCompleted) ?: return
+        persistSessionSnapshotAsync(snapshot)
+    }
+
+    /**
+     * Reads everything needed off the [Player] — this part MUST stay on the main
+     * thread — and copies it into a plain [PlaybackSessionSnapshot]. The actual JSON
+     * serialization + SharedPreferences write happens later, off-main.
+     */
+    private fun captureSessionSnapshot(isCompleted: Boolean): PlaybackSessionSnapshot? {
+        val p = player ?: return null
         val currentIndex = p.currentMediaItemIndex
         val mediaItemCount = p.mediaItemCount
-        if (mediaItemCount <= 0 || currentIndex !in 0 until mediaItemCount) return
-        val items = (0 until mediaItemCount).map { index -> p.getMediaItemAt(index) }
-
-        playbackSessionStorage.save(
+        if (mediaItemCount <= 0 || currentIndex !in 0 until mediaItemCount) return null
+        val items = (0 until mediaItemCount).map { index ->
+            val item = p.getMediaItemAt(index)
+            PlaybackSessionItemSnapshot(
+                mediaId = item.mediaId,
+                uri = item.localConfiguration?.uri?.toString().orEmpty(),
+                title = item.mediaMetadata.title?.toString(),
+                artist = item.mediaMetadata.artist?.toString(),
+                description = item.mediaMetadata.description?.toString(),
+                artworkUri = item.mediaMetadata.artworkUri?.toString(),
+            )
+        }
+        return PlaybackSessionSnapshot(
             items = items,
             currentIndex = currentIndex,
             currentPositionMs = p.currentPosition,
             wasPlaying = p.playWhenReady && p.playbackState != Player.STATE_ENDED,
             playbackSpeed = p.playbackParameters.speed,
-            isCompleted = isCompleted
+            isCompleted = isCompleted,
         )
+    }
+
+    /**
+     * Runs the JSON build + SharedPreferences write on [sessionWriteDispatcher] (a
+     * single-threaded view of Dispatchers.IO), so this never blocks the main thread and
+     * concurrent writes apply in submission order. [PlaybackSessionSnapshot.capturedAtMs]
+     * is checked defensively so a write that somehow got reordered can't clobber a
+     * newer one that already landed.
+     */
+    private fun persistSessionSnapshotAsync(snapshot: PlaybackSessionSnapshot) {
+        serviceScope.launch(sessionWriteDispatcher) {
+            if (snapshot.capturedAtMs < lastPersistedSnapshotAtMs) return@launch
+            lastPersistedSnapshotAtMs = snapshot.capturedAtMs
+            playbackSessionStorage.save(snapshot)
+        }
     }
 
     private fun persistProgress(markCompleted: Boolean) {
@@ -263,7 +307,14 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         stopPersistLoop()
         persistProgress(markCompleted = false)
-        persistPlaybackSession(isCompleted = false)
+        // Flush synchronously here rather than via persistSessionSnapshotAsync: the
+        // service (and serviceJob, its parent) is about to be torn down, and an async
+        // write launched right before serviceJob.cancel() could be canceled before it
+        // ever runs, silently dropping the final session save.
+        captureSessionSnapshot(isCompleted = false)?.let { snapshot ->
+            lastPersistedSnapshotAtMs = snapshot.capturedAtMs
+            playbackSessionStorage.save(snapshot)
+        }
         serviceJob.cancel()
         mediaSession?.release()
         mediaSession = null
