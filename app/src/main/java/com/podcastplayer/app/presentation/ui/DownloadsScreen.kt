@@ -23,10 +23,16 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.Podcasts
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -49,6 +55,7 @@ import com.podcastplayer.app.R
 import com.podcastplayer.app.data.local.UrlDownloadEntity
 import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.domain.model.Episode
+import com.podcastplayer.app.presentation.viewmodel.RestoreDownloadsState
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
 /**
@@ -94,19 +101,30 @@ fun DownloadsScreen(
     entries: List<DownloadEntryUi>,
     failedUrlDownloads: List<UrlDownloadEntity> = emptyList(),
     totalBytes: Long,
+    restoreState: RestoreDownloadsState = RestoreDownloadsState.Idle,
+    maintenanceMessage: String? = null,
     onPlay: (DownloadEntryUi) -> Unit,
     onDelete: (DownloadEntryUi) -> Unit,
     onRetryUrlDownload: (String) -> Unit = {},
     onDeleteUrlDownload: (String) -> Unit = {},
     onDeleteAll: () -> Unit,
+    onRestoreDownloads: () -> Unit = {},
+    onCleanupDuplicates: () -> Unit = {},
+    onDismissRestoreResult: () -> Unit = {},
+    onDismissMaintenanceMessage: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
 ) {
     var showDeleteAllDialog by remember { mutableStateOf(false) }
+    var maintenanceMenuOpen by remember { mutableStateOf(false) }
     val eyebrow = if (entries.isEmpty()) {
         "Offline"
     } else {
         "Offline · ${entries.size} item${if (entries.size == 1) "" else "s"} · ${formatBytes(totalBytes)}"
     }
+    // Offer restore prominently when the library looks freshly wiped (typical
+    // post-reinstall state); it stays reachable from the ⋯ menu otherwise.
+    val showRestoreCard = restoreState !is RestoreDownloadsState.Idle ||
+        (entries.isEmpty() && failedUrlDownloads.isEmpty())
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -127,11 +145,46 @@ fun DownloadsScreen(
                                 )
                             },
                         )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Box {
+                        VibeCircleIconButton(
+                            icon = Icons.Outlined.MoreHoriz,
+                            description = "Download maintenance",
+                            onClick = { maintenanceMenuOpen = true },
+                        )
+                        DropdownMenu(
+                            expanded = maintenanceMenuOpen,
+                            onDismissRequest = { maintenanceMenuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Restore previous downloads") },
+                                leadingIcon = { Icon(Icons.Outlined.Restore, contentDescription = null) },
+                                onClick = { maintenanceMenuOpen = false; onRestoreDownloads() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Clean up duplicate files") },
+                                leadingIcon = { Icon(Icons.Outlined.DeleteSweep, contentDescription = null) },
+                                onClick = { maintenanceMenuOpen = false; onCleanupDuplicates() },
+                            )
+                        }
                     }
                 },
             )
 
+            if (maintenanceMessage != null) {
+                MaintenanceNotice(message = maintenanceMessage, onDismiss = onDismissMaintenanceMessage)
+            }
+
             if (entries.isEmpty() && failedUrlDownloads.isEmpty()) {
+                if (showRestoreCard) {
+                    RestoreDownloadsCard(
+                        state = restoreState,
+                        onRestore = onRestoreDownloads,
+                        onDismiss = onDismissRestoreResult,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -155,6 +208,15 @@ fun DownloadsScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    if (restoreState !is RestoreDownloadsState.Idle) {
+                        item(key = "restore-card") {
+                            RestoreDownloadsCard(
+                                state = restoreState,
+                                onRestore = onRestoreDownloads,
+                                onDismiss = onDismissRestoreResult,
+                            )
+                        }
+                    }
                     if (failedUrlDownloads.isNotEmpty()) {
                         item {
                             Row(
@@ -386,6 +448,126 @@ private fun DownloadRow(
             size = 40.dp,
             iconSize = 22.dp,
             tinted = true,
+        )
+    }
+}
+
+/**
+ * Offer/status card for relinking media left on the device by a previous
+ * install. The [state] machine keeps this one card serving as the button,
+ * the progress row, and the result summary.
+ */
+@Composable
+private fun RestoreDownloadsCard(
+    state: RestoreDownloadsState,
+    onRestore: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.primaryContainer)
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (state is RestoreDownloadsState.Running) {
+                CircularProgressIndicator(
+                    color = colors.primary,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.Restore,
+                    contentDescription = null,
+                    tint = colors.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                val (title, subtitle) = when (state) {
+                    is RestoreDownloadsState.Idle ->
+                        "Reinstalled the app?" to
+                            "Relink downloads already on this device instead of re-downloading them."
+                    is RestoreDownloadsState.Running ->
+                        "Restoring downloads…" to
+                            "Scanning your media folders and matching episodes."
+                    is RestoreDownloadsState.Done ->
+                        if (state.restoredEpisodes == 0 && state.importedClips == 0) {
+                            "Nothing to restore" to "No previously downloaded files were found."
+                        } else {
+                            "Restore complete" to buildString {
+                                append("Relinked ${state.restoredEpisodes} episode")
+                                if (state.restoredEpisodes != 1) append("s")
+                                if (state.importedClips > 0) {
+                                    append(" · imported ${state.importedClips} clip")
+                                    if (state.importedClips != 1) append("s")
+                                }
+                                append(" without re-downloading.")
+                            }
+                        }
+                    is RestoreDownloadsState.Failed ->
+                        "Restore failed" to state.message
+                }
+                Text(
+                    text = title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.onPrimaryContainer,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    color = colors.onPrimaryContainer,
+                    lineHeight = 15.sp,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (state) {
+                is RestoreDownloadsState.Idle -> VibeChip(label = "Restore", onClick = onRestore)
+                is RestoreDownloadsState.Running -> Unit
+                is RestoreDownloadsState.Done,
+                is RestoreDownloadsState.Failed -> VibeChip(label = "Dismiss", onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/** One-line dismissible status strip for cleanup results ("Removed 4 files" etc.). */
+@Composable
+private fun MaintenanceNotice(message: String, onDismiss: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.surfaceVariant)
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = message,
+            fontSize = 12.sp,
+            color = colors.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "DISMISS",
+            fontFamily = JetBrainsMono,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.2.sp,
+            color = colors.primary,
         )
     }
 }

@@ -6,7 +6,9 @@ import android.os.Environment
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.DownloadedEpisodeDao
 import com.podcastplayer.app.data.local.DownloadedEpisodeEntity
+import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaStoreSaver
+import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.domain.model.Episode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -52,6 +54,24 @@ class DownloadManager(private val context: Context) {
             }
 
             if (MediaStoreSaver.isSupported()) {
+                // Reuse an already-on-disk copy instead of re-downloading — covers
+                // both "downloaded earlier this install" edge cases and files left
+                // behind by a previous install (visible once the user grants the
+                // media read permission; without it this quietly finds nothing).
+                val reusable = MediaStoreScanner(context).findExisting(
+                    isVideo = false,
+                    expectedDisplayName = displayName,
+                )
+                if (reusable != null) {
+                    onProgress(1f)
+                    val entity = episode.toEntity(
+                        localPath = reusable.uriString,
+                        fileSize = reusable.sizeBytes,
+                    )
+                    dao.insertEpisode(entity)
+                    return@withContext Result.success(reusable.uriString)
+                }
+
                 val saved = downloadIntoMediaStore(episode, displayName, onProgress)
                     ?: return@withContext Result.failure(
                         java.io.IOException("Could not save audio to MediaStore"),
@@ -238,19 +258,24 @@ class DownloadManager(private val context: Context) {
     /**
      * Human-readable display name for the MediaStore row, so users see e.g.
      * "Lex Fridman - Joe Rogan Interview.mp3" instead of a hex hash when they
-     * browse the Podcasts folder from another app. Sanitization (illegal chars,
-     * length cap) happens in [MediaStoreSaver].
+     * browse the Podcasts folder from another app. Building and sanitizing live
+     * in [MediaNaming] so the restore/reuse matching computes identical names.
      */
     private fun buildDisplayName(episode: Episode, podcastTitle: String?): String {
         val extension = guessExtension(episode.audioUrl) ?: "mp3"
-        val rawTitle = episode.title.trim()
-        val base = when {
-            podcastTitle.isNullOrBlank() && rawTitle.isBlank() -> "episode"
-            podcastTitle.isNullOrBlank() -> rawTitle
-            rawTitle.isBlank() -> podcastTitle
-            else -> "$podcastTitle - $rawTitle"
-        }
-        return "$base.$extension"
+        return MediaNaming.episodeDisplayName(podcastTitle, episode.title, extension)
+    }
+
+    /**
+     * Record an episode as downloaded WITHOUT downloading — the media already
+     * exists on disk (found by the restore flow via [MediaStoreScanner]).
+     */
+    suspend fun registerExistingDownload(
+        episode: Episode,
+        localPath: String,
+        fileSize: Long,
+    ): Unit = withContext(Dispatchers.IO) {
+        dao.insertEpisode(episode.toEntity(localPath = localPath, fileSize = fileSize))
     }
 
     private fun guessExtension(url: String): String? {

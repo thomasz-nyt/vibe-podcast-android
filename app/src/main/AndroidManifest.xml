@@ -10,6 +10,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Restoring downloads after a reinstall: files in the shared VibePodcast folders
+         survive uninstall, but the new install isn't their owner and needs a read
+         permission to see them. Requested at runtime only from the restore/cleanup
+         flows — never on first launch. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <application
         android:name=".PodcastApplication"
         android:allowBackup="true"
