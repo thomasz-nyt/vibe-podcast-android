@@ -28,17 +28,17 @@ class PodcastViewModelTest {
     @get:Rule val mainDispatcherRule = MainDispatcherRule()
 
     @Test
-    fun buildsPlaylistWithAllUnplayedEpisodesOldestFirstInQueueOrder() = runTest(mainDispatcherRule.dispatcher) {
+    fun picksLatestUnplayedEpisodePerPodcastInQueueOrder() = runTest(mainDispatcherRule.dispatcher) {
         val podcastA = podcast("a", feedUrl = "https://feed.example/a")
         val podcastB = podcast("b", feedUrl = "https://feed.example/b")
 
-        // Podcast A: ep-a2 is completed and must be excluded. ep-a1/ep-a3 are unplayed
-        // and published out of chronological order, to verify oldest -> newest sorting.
+        // Podcast A: ep-a2 is the newest overall (3_000) but completed, so it must be
+        // excluded; the newest UNPLAYED is ep-a3 (2_000), not ep-a1 (1_000).
         val epA1 = episode("ep-a1", podcastA.id, pubDateMs = 1_000L)
         val epA2 = episode("ep-a2", podcastA.id, pubDateMs = 3_000L)
         val epA3 = episode("ep-a3", podcastA.id, pubDateMs = 2_000L)
 
-        // Podcast B: both episodes unplayed (no progress row at all for one of them).
+        // Podcast B: both unplayed; newest is ep-b2 (1_500).
         val epB1 = episode("ep-b1", podcastB.id, pubDateMs = 500L)
         val epB2 = episode("ep-b2", podcastB.id, pubDateMs = 1_500L)
 
@@ -51,50 +51,77 @@ class PodcastViewModelTest {
             podcastB.id to listOf(progress(epB1.id, podcastB.id, completed = false)),
         )
 
-        // Queue order is B then A; the result must follow queue order, not alphabetical
-        // podcast id order or feed-fetch completion order.
+        // Queue order is B then A; result must follow queue order (one episode each),
+        // not alphabetical podcast id order or feed-fetch completion order.
         val result = buildUnplayedEpisodesForQueue(
             podcasts = listOf(podcastB, podcastA),
             fetchEpisodes = { feedUrl, _ -> Result.success(episodesByFeed.getValue(feedUrl)) },
             fetchProgress = { podcastId -> progressByPodcast.getValue(podcastId) },
         )
 
-        assertEquals(listOf(epB1.id, epB2.id, epA1.id, epA3.id), result.map { it.id })
+        assertEquals(listOf(epB2.id, epA3.id), result.map { it.id })
     }
 
     @Test
-    fun skipsPodcastsWithNoFeedUrlAndToleratesFetchFailures() = runTest(mainDispatcherRule.dispatcher) {
+    fun skipsPodcastsWithNoEligibleEpisodeAndToleratesFetchFailures() = runTest(mainDispatcherRule.dispatcher) {
         val noFeed = podcast("no-feed", feedUrl = null)
         val failingFeed = podcast("failing", feedUrl = "https://feed.example/failing")
+        val allCompleted = podcast("all-done", feedUrl = "https://feed.example/done")
         val ok = podcast("ok", feedUrl = "https://feed.example/ok")
+        val epDone = episode("ep-done", allCompleted.id, pubDateMs = 1_000L)
         val epOk = episode("ep-ok", ok.id, pubDateMs = 1_000L)
 
         val result = buildUnplayedEpisodesForQueue(
-            podcasts = listOf(noFeed, failingFeed, ok),
+            podcasts = listOf(noFeed, failingFeed, allCompleted, ok),
             fetchEpisodes = { feedUrl, _ ->
-                if (feedUrl == failingFeed.feedUrl) Result.failure(Exception("boom"))
-                else Result.success(listOf(epOk))
+                when (feedUrl) {
+                    failingFeed.feedUrl -> Result.failure(Exception("boom"))
+                    allCompleted.feedUrl -> Result.success(listOf(epDone))
+                    else -> Result.success(listOf(epOk))
+                }
             },
-            fetchProgress = { emptyList() },
+            fetchProgress = { podcastId ->
+                if (podcastId == allCompleted.id) listOf(progress(epDone.id, podcastId, completed = true))
+                else emptyList()
+            },
         )
 
+        // no-feed skipped, failing skipped, all-completed skipped → only ok remains.
         assertEquals(listOf(epOk.id), result.map { it.id })
     }
 
     @Test
-    fun episodesWithNoPubDateSortLast() = runTest(mainDispatcherRule.dispatcher) {
+    fun picksLatestDatedEpisodeOverUndated() = runTest(mainDispatcherRule.dispatcher) {
         val podcast = podcast("a", feedUrl = "https://feed.example/a")
         val dated = episode("ep-dated", podcast.id, pubDateMs = 1_000L)
         val undated = episode("ep-undated", podcast.id, pubDateMs = null)
 
         val result = buildUnplayedEpisodesForQueue(
             podcasts = listOf(podcast),
-            // Listed undated-first on purpose, to confirm sorting (not input order) decides.
+            // Listed undated-first on purpose: an undated episode must never win "newest"
+            // over a dated one, regardless of input order.
             fetchEpisodes = { _, _ -> Result.success(listOf(undated, dated)) },
             fetchProgress = { emptyList() },
         )
 
-        assertEquals(listOf(dated.id, undated.id), result.map { it.id })
+        assertEquals(listOf(dated.id), result.map { it.id })
+    }
+
+    @Test
+    fun allNullDatesFallsBackToFeedFirst() = runTest(mainDispatcherRule.dispatcher) {
+        val podcast = podcast("a", feedUrl = "https://feed.example/a")
+        // Feeds are conventionally newest-first; with no dates to compare, the first
+        // episode in document order is taken as the newest.
+        val feedNewest = episode("ep-first", podcast.id, pubDateMs = null)
+        val feedOlder = episode("ep-second", podcast.id, pubDateMs = null)
+
+        val result = buildUnplayedEpisodesForQueue(
+            podcasts = listOf(podcast),
+            fetchEpisodes = { _, _ -> Result.success(listOf(feedNewest, feedOlder)) },
+            fetchProgress = { emptyList() },
+        )
+
+        assertEquals(listOf(feedNewest.id), result.map { it.id })
     }
 
     private fun podcast(id: String, feedUrl: String?) = Podcast(

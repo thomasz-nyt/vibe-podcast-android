@@ -124,10 +124,13 @@ Ranked by user-visible impact.
 
 ### Corrections (bugs in shipped features)
 
-- **[FIXED] Play Queue contradicted its own spec.** `docs/specs/004-podcast-queue-play.md` specifies
-  playing **all** unplayed episodes per podcast, oldest→newest; the implementation played only the single
-  newest unplayed episode per podcast (`PodcastViewModel.kt:470-499`, `maxByOrNull { pubDate }`). Also
-  fetched each feed sequentially. → spec behavior implemented, fetches parallelized (bounded).
+- **[RESOLVED] Play Queue: latest-episode-per-podcast is the intended behavior.** An earlier pass read
+  spec 004 literally ("all unplayed episodes, oldest→newest") and rewrote the builder from
+  `maxByOrNull { pubDate }` (single newest unplayed per podcast) to `sortedBy { pubDate }` over all
+  unplayed episodes. That made Play Queue start at the *oldest* episode of the first podcast, which users
+  reported as a bug. Product intent confirmed: each queued podcast contributes only its **single newest
+  unplayed** episode, in queue order. Reverted to `maxByOrNull` selection and **spec 004 §2.3/§4/§7 were
+  rewritten to match** so code and spec no longer disagree. Concurrent bounded feed fetches were kept.
 - **[FIXED] URL-download partial files leaked.** Workdir cleanup ran only on the success path
   (`UrlDownloadService.kt:169-171`); any failure/cancel left `url_downloads/<id>/` with `.part` files
   forever, and a leftover partial could even be picked up as the "produced file" on retry
