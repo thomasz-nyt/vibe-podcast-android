@@ -3,6 +3,7 @@ package com.podcastplayer.app.data.repository
 import android.content.Context
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.UrlDownloadDao
 import com.podcastplayer.app.data.local.UrlDownloadEntity
@@ -190,6 +191,63 @@ class UrlDownloadRepository(private val context: Context) {
             fileSize = fileSize,
             completedAtMs = System.currentTimeMillis(),
         )
+    }
+
+    /**
+     * Import a media file left behind by a previous install as a playable row.
+     * Used by the restore flow for files that couldn't be matched back to a
+     * subscribed podcast's episode (e.g. yt-dlp clips, or episodes of shows the
+     * user hasn't re-subscribed to yet). The source URL is unknowable at this
+     * point, so retry is impossible — but play/delete both work.
+     *
+     * Returns false when this file was already imported (id is deterministic
+     * from the content URI, so repeat restores are no-ops).
+     */
+    suspend fun importRestored(
+        displayName: String,
+        uriString: String,
+        sizeBytes: Long,
+        isVideo: Boolean,
+    ): Boolean = withContext(Dispatchers.IO) {
+        val id = restoredIdFor(uriString)
+        if (dao.getById(id) != null) return@withContext false
+        val now = System.currentTimeMillis()
+        dao.upsert(
+            UrlDownloadEntity(
+                id = id,
+                sourceUrl = "",
+                source = UrlSource.OTHER.tag,
+                title = MediaNaming.titleFromDisplayName(displayName),
+                uploader = null,
+                thumbnailUrl = null,
+                mediaType = if (isVideo) MediaType.VIDEO.tag else MediaType.AUDIO.tag,
+                localPath = uriString,
+                durationMs = null,
+                fileSize = sizeBytes,
+                status = UrlDownloadStatus.COMPLETED.name,
+                progressPercent = 100f,
+                errorMessage = null,
+                createdAtMs = now,
+                completedAtMs = now,
+            )
+        )
+        true
+    }
+
+    /**
+     * Drop the restored-orphan row for [uriString], if one exists. Called when a
+     * later restore pass matches that same file back to a real RSS episode, so
+     * the item isn't listed twice (once as episode, once as orphan clip).
+     */
+    suspend fun removeRestoredFor(uriString: String) = withContext(Dispatchers.IO) {
+        dao.deleteById(restoredIdFor(uriString))
+    }
+
+    private fun restoredIdFor(uriString: String): String {
+        val hash = java.security.MessageDigest.getInstance("MD5")
+            .digest(uriString.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "restored-$hash"
     }
 
     /** Delete the row + the underlying file (if any). */

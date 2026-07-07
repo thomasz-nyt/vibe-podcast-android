@@ -155,8 +155,9 @@ object MediaStoreSaver {
         }
     }
 
-    private fun sanitize(name: String): String =
-        name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(120).ifBlank { "vibe-media" }
+    // Delegated so writers (this) and readers (MediaStoreScanner matching) can
+    // never drift apart on what a stored name looks like.
+    private fun sanitize(name: String): String = MediaNaming.sanitize(name)
 
     /**
      * Decide whether a [localPath] string points at a MediaStore entry (content://)

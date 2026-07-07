@@ -14,7 +14,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.PodcastApplication
+import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaStoreSaver
+import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.data.repository.UrlDownloadStatus
 import com.podcastplayer.app.domain.model.MediaType
@@ -163,6 +165,22 @@ class UrlDownloadService : Service() {
             repository.markExtracting(id)
             updateNotification(buildProgressNotification(entity.title, 0f, "Preparing…"))
 
+            // Reuse an already-on-disk copy (same install, or a previous install once
+            // the media read permission is granted) instead of re-running yt-dlp.
+            val requestedType = MediaType.fromTag(entity.mediaType)
+            val expectedName = MediaNaming.urlDisplayName(
+                uploader = entity.uploader,
+                title = entity.title,
+                extension = if (requestedType == MediaType.VIDEO) "mp4" else "mp3",
+            )
+            val reusable = MediaStoreScanner(applicationContext)
+                .findExisting(isVideo = requestedType == MediaType.VIDEO, expectedDisplayName = expectedName)
+            if (reusable != null) {
+                repository.markCompleted(id, reusable.uriString, reusable.sizeBytes)
+                updateNotification(buildCompletedNotification(entity.title))
+                return
+            }
+
             if (!PodcastApplication.youtubeDlReady) {
                 repository.markFailed(id, "Downloader not ready. Reopen the app and try again.")
                 return
@@ -204,9 +222,8 @@ class UrlDownloadService : Service() {
             // Try to publish to MediaStore (Android 10+) so VLC, Files, and the
             // Gallery can discover the file. Falls back to app-private storage on
             // older devices.
-            val mediaType = MediaType.fromTag(entity.mediaType)
             val displayName = buildDisplayName(entity.title, entity.uploader, produced.extension)
-            val saved = publishToMediaStore(produced, mediaType, displayName)
+            val saved = publishToMediaStore(produced, requestedType, displayName)
 
             if (saved != null) {
                 repository.markCompleted(id, saved.uri.toString(), saved.sizeBytes)
@@ -289,19 +306,10 @@ class UrlDownloadService : Service() {
      * Display name written to MediaStore. Prefixes the uploader (channel / poster)
      * when available so files browsed from VLC / Gallery read e.g.
      * "Lex Fridman - Joe Rogan #1.mp4" rather than just the bare video title.
-     * Sanitization (illegal chars, length cap) happens inside [MediaStoreSaver].
+     * Building/sanitizing live in [MediaNaming] so reuse matching stays in sync.
      */
-    private fun buildDisplayName(title: String, uploader: String?, extension: String): String {
-        val rawTitle = title.trim()
-        val rawUploader = uploader?.trim()?.removePrefix("@")?.trim()
-        val base = when {
-            rawUploader.isNullOrBlank() && rawTitle.isBlank() -> "vibe-clip"
-            rawUploader.isNullOrBlank() -> rawTitle
-            rawTitle.isBlank() -> rawUploader
-            else -> "$rawUploader - $rawTitle"
-        }
-        return "$base.${extension.ifBlank { "mp4" }}"
-    }
+    private fun buildDisplayName(title: String, uploader: String?, extension: String): String =
+        MediaNaming.urlDisplayName(uploader, title, extension)
 
     private fun pickProducedFile(dir: File): File? {
         val files = dir.listFiles()?.toList().orEmpty()

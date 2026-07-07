@@ -2,6 +2,8 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.MediaNaming
+import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.local.OpmlExportSummary
 import com.podcastplayer.app.data.local.OpmlImportData
 import com.podcastplayer.app.data.local.OpmlManager
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +44,7 @@ class PodcastViewModel(
     private val queueStorage: QueueStorage,
     private val playbackProgressDao: PlaybackProgressDao,
     private val urlDownloadRepository: UrlDownloadRepository? = null,
+    private val mediaScanner: MediaStoreScanner? = null,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<PodcastUiState>(PodcastUiState.Initial)
@@ -294,6 +298,152 @@ class PodcastViewModel(
         return result
     }
 
+    private val _restoreState = MutableStateFlow<RestoreDownloadsState>(RestoreDownloadsState.Idle)
+    val restoreState: StateFlow<RestoreDownloadsState> = _restoreState.asStateFlow()
+
+    fun dismissRestoreResult() {
+        if (_restoreState.value !is RestoreDownloadsState.Running) {
+            _restoreState.value = RestoreDownloadsState.Idle
+        }
+    }
+
+    /** Read permissions the restore/cleanup flows need. Exposed for the UI to request. */
+    fun mediaReadPermissions(): Array<String> = MediaStoreScanner.requiredReadPermissions()
+
+    fun hasMediaReadPermission(): Boolean = mediaScanner?.hasReadPermission() == true
+
+    /**
+     * Relink media files already on disk (typically left behind by a previous
+     * install) instead of forcing the user to re-download everything.
+     *
+     * Pass 1 — for each subscribed podcast, fetch its feed and match episodes
+     * against the scanned files by [MediaNaming.matchKey]; hits are registered
+     * as downloads pointing at the existing file. Pass 2 — files that matched
+     * nothing (yt-dlp clips, episodes of not-yet-resubscribed shows) are
+     * imported as playable orphan entries, one per name key so "(1)"-style
+     * duplicate copies aren't imported alongside their original.
+     */
+    fun restorePreviousDownloads() {
+        val scanner = mediaScanner ?: return
+        if (_restoreState.value is RestoreDownloadsState.Running) return
+        _restoreState.value = RestoreDownloadsState.Running
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val found = scanner.scanAll().filter { it.sizeBytes > 0L }
+                if (found.isEmpty()) {
+                    _restoreState.value = RestoreDownloadsState.Done(0, 0)
+                    return@launch
+                }
+
+                // Files already referenced by either downloads table are not
+                // candidates — and neither is any same-named duplicate of them.
+                val referencedUris = buildSet {
+                    downloadManager.getAllDownloadedEntitiesFlow().first().forEach { add(it.localPath) }
+                    urlDownloadRepository?.observeAll()?.first()?.forEach { it.localPath?.let(::add) }
+                }
+                val claimedUris = referencedUris.toMutableSet()
+                val claimedKeys = found
+                    .filter { it.uriString in referencedUris }
+                    .map { MediaNaming.matchKey(it.displayName) }
+                    .toMutableSet()
+
+                val audioByKey = found.filter { !it.isVideo }
+                    .groupBy { MediaNaming.matchKey(it.displayName) }
+
+                var restoredEpisodes = 0
+                for (podcast in savedPodcastsStorage.savedPodcasts.value) {
+                    val feedUrl = podcast.feedUrl ?: continue
+                    val episodes = repository.getEpisodes(feedUrl, podcast.id).getOrNull() ?: continue
+                    for (episode in episodes) {
+                        if (downloadManager.isEpisodeDownloaded(episode.id)) continue
+                        val key = MediaNaming.matchKey(
+                            MediaNaming.episodeDisplayName(podcast.title, episode.title, "mp3"),
+                        )
+                        val pick = audioByKey[key]
+                            ?.filter { it.uriString !in claimedUris }
+                            ?.minWithOrNull(
+                                compareBy(
+                                    { MediaNaming.hasDuplicateSuffix(it.displayName) },
+                                    { it.dateAddedSec },
+                                ),
+                            ) ?: continue
+                        claimedUris += pick.uriString
+                        claimedKeys += key
+                        downloadManager.registerExistingDownload(
+                            episode = episode,
+                            localPath = pick.uriString,
+                            fileSize = pick.sizeBytes,
+                        )
+                        // If an earlier restore imported this file as an orphan clip,
+                        // drop that row now that it has a proper episode identity.
+                        urlDownloadRepository?.removeRestoredFor(pick.uriString)
+                        restoredEpisodes++
+                    }
+                }
+
+                // Orphans: at most one import per name key, skipping keys already
+                // represented in the library (their extra copies are duplicates
+                // for the cleaner, not new content).
+                var importedClips = 0
+                val orphanGroups = found
+                    .filter { it.uriString !in claimedUris }
+                    .groupBy { it.isVideo to MediaNaming.matchKey(it.displayName) }
+                for ((groupKey, candidates) in orphanGroups) {
+                    if (groupKey.second in claimedKeys) continue
+                    val pick = candidates.minWithOrNull(
+                        compareBy(
+                            { MediaNaming.hasDuplicateSuffix(it.displayName) },
+                            { it.dateAddedSec },
+                        ),
+                    ) ?: continue
+                    val imported = urlDownloadRepository?.importRestored(
+                        displayName = pick.displayName,
+                        uriString = pick.uriString,
+                        sizeBytes = pick.sizeBytes,
+                        isVideo = pick.isVideo,
+                    ) == true
+                    if (imported) importedClips++
+                }
+
+                refreshEpisodesWithDownloads()
+                _restoreState.value = RestoreDownloadsState.Done(restoredEpisodes, importedClips)
+            } catch (t: Throwable) {
+                _restoreState.value = RestoreDownloadsState.Failed(t.message ?: "Restore failed")
+            }
+        }
+    }
+
+    /**
+     * Content URIs of redundant duplicate copies ("Episode (1).mp3" etc.) that
+     * are safe to delete: never a file some DB row still points at, and always
+     * keeping one copy per name key. The UI feeds these into the system's
+     * batch-delete consent dialog.
+     */
+    suspend fun planDuplicateCleanup(): List<String> = withContext(Dispatchers.IO) {
+        val scanner = mediaScanner ?: return@withContext emptyList()
+        val found = scanner.scanAll()
+        val referencedUris = buildSet {
+            downloadManager.getAllDownloadedEntitiesFlow().first().forEach { add(it.localPath) }
+            urlDownloadRepository?.observeAll()?.first()?.forEach { it.localPath?.let(::add) }
+        }
+        found
+            .groupBy { it.isVideo to MediaNaming.matchKey(it.displayName) }
+            .values
+            .filter { it.size > 1 }
+            .flatMap { group ->
+                val keep = group.firstOrNull { it.uriString in referencedUris }
+                    ?: group.minWithOrNull(
+                        compareBy(
+                            { MediaNaming.hasDuplicateSuffix(it.displayName) },
+                            { it.dateAddedSec },
+                        ),
+                    )
+                group.filter { it !== keep && it.uriString !in referencedUris }
+                    .map { it.uriString }
+            }
+    }
+
     /**
      * Mark an episode as played without actually playing it. Stamps the
      * playback_progress row so it appears in the "completed" filter and
@@ -532,6 +682,15 @@ sealed class FeedPreviewState {
     data class Loaded(val podcast: Podcast) : FeedPreviewState()
     data class Saved(val podcast: Podcast) : FeedPreviewState()
     data class Error(val message: String) : FeedPreviewState()
+}
+
+sealed class RestoreDownloadsState {
+    data object Idle : RestoreDownloadsState()
+    data object Running : RestoreDownloadsState()
+
+    /** [restoredEpisodes] relinked to subscriptions; [importedClips] kept as orphan entries. */
+    data class Done(val restoredEpisodes: Int, val importedClips: Int) : RestoreDownloadsState()
+    data class Failed(val message: String) : RestoreDownloadsState()
 }
 
 /** Bound on simultaneous RSS feed fetches when building a queue playlist. */

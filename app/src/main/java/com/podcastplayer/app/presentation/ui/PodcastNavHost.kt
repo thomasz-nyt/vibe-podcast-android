@@ -13,8 +13,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -96,6 +98,7 @@ fun PodcastNavHost(
     val urlDownloadRepositoryShared = remember {
         com.podcastplayer.app.data.repository.UrlDownloadRepository(context)
     }
+    val mediaScanner = remember { com.podcastplayer.app.data.local.MediaStoreScanner(context) }
     val podcastViewModel: PodcastViewModel = viewModel(
         factory = PodcastViewModelFactory(
             PodcastRepository(iTunesApi.create(), RssParser()),
@@ -104,6 +107,7 @@ fun PodcastNavHost(
             queueStorage,
             db.playbackProgressDao(),
             urlDownloadRepositoryShared,
+            mediaScanner,
         )
     )
     val playerViewModel: PlayerViewModel = viewModel(
@@ -475,6 +479,65 @@ fun PodcastNavHost(
                     val podcastDownloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
                     val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
                     val failedUrlDownloads by urlDownloadViewModel.needsAttentionDownloads.collectAsState()
+                    val restoreState by podcastViewModel.restoreState.collectAsState()
+                    var maintenanceMessage by remember { mutableStateOf<String?>(null) }
+                    var pendingDeleteCount by remember { mutableStateOf(0) }
+
+                    // Receives the outcome of the system batch-delete consent dialog.
+                    val deleteLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.StartIntentSenderForResult()
+                    ) { result ->
+                        maintenanceMessage = if (result.resultCode == android.app.Activity.RESULT_OK) {
+                            "Removed $pendingDeleteCount duplicate file" +
+                                (if (pendingDeleteCount == 1) "." else "s.")
+                        } else {
+                            "Cleanup canceled."
+                        }
+                    }
+
+                    fun startCleanup() {
+                        scope.launch {
+                            val uris = podcastViewModel.planDuplicateCleanup()
+                            if (uris.isEmpty()) {
+                                maintenanceMessage = "No duplicate files found."
+                                return@launch
+                            }
+                            val request = mediaScanner.createDeleteRequest(uris.map(Uri::parse))
+                            if (request == null) {
+                                maintenanceMessage = "Duplicate cleanup needs Android 11 or newer."
+                                return@launch
+                            }
+                            pendingDeleteCount = uris.size
+                            deleteLauncher.launch(
+                                androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build()
+                            )
+                        }
+                    }
+
+                    // Restore/cleanup both need the media read permission to see files a
+                    // previous install owned; route the intended action through the grant.
+                    var pendingMediaAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+                    val permissionLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestMultiplePermissions()
+                    ) { grants ->
+                        val action = pendingMediaAction
+                        pendingMediaAction = null
+                        if (grants.values.any { it }) {
+                            action?.invoke()
+                        } else {
+                            maintenanceMessage =
+                                "Media access is needed to find files from a previous install."
+                        }
+                    }
+
+                    fun withMediaPermission(action: () -> Unit) {
+                        if (podcastViewModel.hasMediaReadPermission()) {
+                            action()
+                        } else {
+                            pendingMediaAction = action
+                            permissionLauncher.launch(podcastViewModel.mediaReadPermissions())
+                        }
+                    }
                     // Raw entities give us fileSize, which the UI flows above don't carry.
                     val podcastEntities by produceState<List<com.podcastplayer.app.data.local.DownloadedEpisodeEntity>>(
                         initialValue = emptyList(),
@@ -553,6 +616,14 @@ fun PodcastNavHost(
                                 urlDownloads.forEach { urlDownloadViewModel.deleteDownload(it.id) }
                             }
                         },
+                        restoreState = restoreState,
+                        maintenanceMessage = maintenanceMessage,
+                        onRestoreDownloads = {
+                            withMediaPermission { podcastViewModel.restorePreviousDownloads() }
+                        },
+                        onCleanupDuplicates = { withMediaPermission { startCleanup() } },
+                        onDismissRestoreResult = { podcastViewModel.dismissRestoreResult() },
+                        onDismissMaintenanceMessage = { maintenanceMessage = null },
                         onBack = { navController.popBackStack(route = Routes.Home, inclusive = false) }
                     )
                 }
