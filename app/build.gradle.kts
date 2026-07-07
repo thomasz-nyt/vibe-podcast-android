@@ -115,6 +115,10 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    // Real XmlPullParser for JVM unit tests (same parser Android ships) — the
+    // mockable android.jar stubs XmlPullParserFactory, so RssParserTest injects
+    // a KXmlParser directly.
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

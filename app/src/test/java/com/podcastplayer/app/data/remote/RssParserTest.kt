@@ -20,7 +20,9 @@ import org.junit.Test
  */
 class RssParserTest {
 
-    private val parser = RssParser()
+    // Inject a real kxml2 parser: on the JVM the default XmlPullParserFactory
+    // path resolves to the mockable android.jar, whose methods throw "Stub!".
+    private val parser = RssParser(newPullParser = { org.kxml2.io.KXmlParser() })
 
     private fun episodesFor(pubDates: List<String>): List<Episode> {
         val items = pubDates.mapIndexed { index, pubDate ->

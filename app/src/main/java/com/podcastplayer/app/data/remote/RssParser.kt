@@ -12,11 +12,19 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
-class RssParser {
+class RssParser(
+    /**
+     * How to obtain a pull parser. The default goes through the platform
+     * factory (KXmlParser on device); JVM unit tests inject a real kxml2
+     * parser directly because the mockable android.jar stubs the factory.
+     */
+    private val newPullParser: () -> XmlPullParser = {
+        XmlPullParserFactory.newInstance().newPullParser()
+    },
+) {
 
     fun parsePodcast(inputStream: InputStream, feedUrl: String): PodcastFeedMetadata {
-        val factory = XmlPullParserFactory.newInstance()
-        val parser = factory.newPullParser()
+        val parser = newPullParser()
         parser.setInput(inputStream, null)
 
         var inChannel = false
@@ -81,8 +89,7 @@ class RssParser {
     }
 
     fun parseEpisodes(inputStream: InputStream, podcastId: String): List<Episode> {
-        val factory = XmlPullParserFactory.newInstance()
-        val parser = factory.newPullParser()
+        val parser = newPullParser()
         parser.setInput(inputStream, null)
 
         val episodes = mutableListOf<Episode>()
