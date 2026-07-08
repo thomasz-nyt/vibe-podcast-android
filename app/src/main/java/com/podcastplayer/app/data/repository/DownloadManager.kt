@@ -211,35 +211,49 @@ class DownloadManager(private val context: Context) {
      *  the domain [Episode] doesn't carry. */
     fun getAllDownloadedEntitiesFlow(): Flow<List<DownloadedEpisodeEntity>> = dao.getAllEpisodes()
 
-    suspend fun deleteEpisode(episodeId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    /**
+     * Delete one downloaded episode (row + file). Returns the content URI that
+     * couldn't be deleted directly (a MediaStore entry owned by a previous install)
+     * and needs the system consent dialog — empty if fully handled.
+     */
+    suspend fun deleteEpisode(episodeId: String): List<String> = withContext(Dispatchers.IO) {
         try {
-            val episode = dao.getEpisodeById(episodeId)
-            if (episode != null) {
-                deleteLocalPayload(episode.localPath)
-                dao.deleteEpisodeById(episodeId)
-            }
-            Result.success(Unit)
+            val episode = dao.getEpisodeById(episodeId) ?: return@withContext emptyList()
+            val consent = deleteLocalPayload(episode.localPath)
+            dao.deleteEpisodeById(episodeId)
+            listOfNotNull(consent)
         } catch (e: Exception) {
-            Result.failure(e)
+            emptyList()
         }
     }
 
-    suspend fun deleteAllDownloads(): Result<Unit> = withContext(Dispatchers.IO) {
+    /** Same as [deleteEpisode] but for every RSS download; returns all consent-needed URIs. */
+    suspend fun deleteAllDownloads(): List<String> = withContext(Dispatchers.IO) {
         try {
             val episodes = dao.getAllEpisodes().first()
-            episodes.forEach { episode -> deleteLocalPayload(episode.localPath) }
+            val consent = episodes.mapNotNull { deleteLocalPayload(it.localPath) }
             dao.deleteAll()
-            Result.success(Unit)
+            consent
         } catch (e: Exception) {
-            Result.failure(e)
+            emptyList()
         }
     }
 
-    /** Delete either a MediaStore content row or a local file, depending on the path scheme. */
-    private fun deleteLocalPayload(localPath: String) {
-        if (MediaStoreSaver.deleteByUri(context, localPath)) return
+    /**
+     * Delete the on-disk payload for [localPath]. For a `content://` MediaStore entry
+     * we try a direct delete; if that fails (the file is owned by a previous install),
+     * the URI is RETURNED so the caller can route it through the system consent dialog
+     * — we must NOT fall back to `File(contentUri).delete()`, which silently no-ops on
+     * a content URI and was why deletes left files on disk. Returns null when the file
+     * was removed (or was a plain file path handled here).
+     */
+    private fun deleteLocalPayload(localPath: String): String? {
+        if (localPath.startsWith("content://")) {
+            return if (MediaStoreSaver.deleteByUri(context, localPath)) null else localPath
+        }
         val file = File(localPath)
         if (file.exists()) file.delete()
+        return null
     }
 
     suspend fun getDownloadedEpisode(episodeId: String): DownloadedEpisodeEntity? {

@@ -292,11 +292,20 @@ class PodcastViewModel(
         _downloadError.value = null
     }
 
-    suspend fun deleteDownload(episodeId: String): Result<Unit> {
-        val result = downloadManager.deleteEpisode(episodeId)
+    /**
+     * Delete one RSS podcast download. Returns content URIs whose files couldn't be
+     * removed directly (owned by a previous install) and need the system consent
+     * dialog — the UI batches them into [MediaStoreScanner.createDeleteRequest].
+     */
+    suspend fun deleteDownload(episodeId: String): List<String> {
+        val consent = downloadManager.deleteEpisode(episodeId)
         refreshEpisodesWithDownloads()
-        return result
+        return consent
     }
+
+    /** Delete one URL (YouTube/X) download; returns consent-needed URIs (see [deleteDownload]). */
+    suspend fun deleteUrlDownload(urlId: String): List<String> =
+        urlDownloadRepository?.delete(urlId).orEmpty()
 
     private val _restoreState = MutableStateFlow<RestoreDownloadsState>(RestoreDownloadsState.Idle)
     val restoreState: StateFlow<RestoreDownloadsState> = _restoreState.asStateFlow()
@@ -587,8 +596,30 @@ class PodcastViewModel(
         return queueStorage.getQueuesForPodcast(podcastId)
     }
 
-    suspend fun deleteAllDownloads(): Result<Unit> {
-        return downloadManager.deleteAllDownloads()
+    /**
+     * Remove ALL downloads and their files from the device — RSS + URL rows, and every
+     * file in the Vibe MediaStore folders, INCLUDING orphans and the duplicate "(1)"
+     * copies left by re-downloads across reinstalls. Owned files are deleted directly;
+     * the returned list is the content URIs (non-owned / dupes / orphans) that need the
+     * system consent dialog. The folder sweep needs the media read permission, so the
+     * UI gates this behind [hasMediaReadPermission].
+     */
+    suspend fun deleteAllDownloads(): List<String> = withContext(Dispatchers.IO) {
+        val consent = mutableListOf<String>()
+        consent += downloadManager.deleteAllDownloads()
+        consent += urlDownloadRepository?.deleteAllReturningConsent().orEmpty()
+
+        // Sweep anything still sitting in the Vibe folders that our DB rows didn't cover:
+        // duplicate copies from prior reinstalls, and orphans. Direct-delete what we own;
+        // hand the rest to the caller for the consent dialog.
+        val scanner = mediaScanner
+        if (scanner != null) {
+            scanner.scanAll().forEach { found ->
+                if (!scanner.deleteDirect(found.uriString)) consent += found.uriString
+            }
+        }
+        refreshEpisodesWithDownloads()
+        consent.distinct()
     }
 
     suspend fun exportOpml(outputStream: OutputStream) {
