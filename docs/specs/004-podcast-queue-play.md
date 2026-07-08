@@ -13,8 +13,13 @@ Last updated: 2026-01-31
 2. **Queue remains podcast-level** (Option A)
    - Queue is a manually ordered list of subscribed podcasts.
 3. **Play Queue behavior**
-   - “Play Queue” should play **all unplayed episodes** for each podcast **in the queue order**.
-   - Within a podcast, episodes are played in a consistent order (default: **oldest → newest** among unplayed episodes).
+   - “Play Queue” should play the **single latest (newest) unplayed episode** of each
+     podcast, **in the queue order** (podcast 1’s newest, then podcast 2’s newest, …).
+   - Rationale: the queue is a *podcast* list, not an episode backlog. Users tapping
+     “Play Queue” want the freshest episode from each show they follow — not to be
+     dropped at the oldest unheard episode of the first show. (An earlier revision
+     played *all* unplayed episodes oldest→newest; that started playback at the oldest
+     episode, which users reported as a bug. See docs/analysis-2026-07.md.)
 
 ## 3) UX changes
 ### 3.1 Home (Search screen)
@@ -28,9 +33,10 @@ Last updated: 2026-01-31
 ## 4) Playback implementation
 - Build a flattened episode list:
   1) Iterate podcasts in queue order
-  2) Fetch RSS episodes per podcast
+  2) Fetch RSS episodes per podcast (fetches run concurrently, bounded)
   3) Filter out completed episodes using `PlaybackProgressDao` (completed=true)
-  4) Append remaining episodes to a single list
+  4) Select the **newest remaining episode** (max by `pubDate`) for that podcast
+  5) Append that one episode to a single list (podcasts with no eligible episode are skipped)
 - Start playback using a Media3 playlist:
   - `MediaController.setMediaItems(mediaItems)`
   - `prepare()` then `play()`
@@ -38,7 +44,11 @@ Last updated: 2026-01-31
 ## 5) Data / filtering rules
 - “Unplayed” = no progress row, or `completed=false`.
 - Exclude episodes marked completed.
-- Partially played episodes are included.
+- Partially played episodes are eligible (a partially-played newest episode is still
+  the one selected).
+- “Newest” = max `Episode.pubDate`. Episodes with an unknown/unparseable pubDate rank
+  as oldest (never win “newest”); if *every* candidate lacks a pubDate, the first in
+  feed document order is used (feeds are conventionally newest-first).
 
 ## 6) Non-goals (for this spec)
 - Episode-level Up Next queue UI.
@@ -48,5 +58,6 @@ Last updated: 2026-01-31
 ## 7) Acceptance criteria
 - Home shows a Play Queue button when subscriptions exist.
 - Queue screen Play Queue starts audio playback.
-- Playback continues across multiple episodes (playlist) until exhausted.
-- Completed episodes are skipped.
+- The first track is the **newest unplayed** episode of the **first** queued podcast.
+- Playback continues across podcasts (one episode each, queue order) until exhausted.
+- Completed episodes are never selected; a podcast whose episodes are all completed is skipped.

@@ -621,10 +621,10 @@ class PodcastViewModel(
 
     /**
      * Build the "Play Queue" playlist per docs/specs/004-podcast-queue-play.md section 4-5:
-     * for each podcast in queue order, include ALL unplayed (non-completed) episodes,
-     * ordered oldest -> newest within that podcast. Queue order across podcasts is preserved
-     * in the flattened result. Per-podcast feed fetches run concurrently (independent network
-     * calls), bounded by [MAX_CONCURRENT_QUEUE_FEED_FETCHES].
+     * for each podcast in queue order, include its single LATEST (newest) unplayed
+     * (non-completed) episode. Queue order across podcasts is preserved in the result.
+     * Per-podcast feed fetches run concurrently (independent network calls), bounded by
+     * [MAX_CONCURRENT_QUEUE_FEED_FETCHES].
      */
     suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
         return buildUnplayedEpisodesForQueue(
@@ -705,8 +705,9 @@ private const val MAX_CONCURRENT_QUEUE_FEED_FETCHES = 4
  *
  * Feed fetches for different podcasts are independent network calls, so they run
  * concurrently (bounded by [MAX_CONCURRENT_QUEUE_FEED_FETCHES]) while queue order is
- * preserved in the flattened result: `awaitAll()` on a `List<Deferred<T>>` returns
- * results in the original list order, not completion order.
+ * preserved in the result: `awaitAll()` on a `List<Deferred<T>>` returns results in
+ * the original list order, not completion order. Podcasts whose latest unplayed
+ * episode can't be resolved (no feed, empty feed, all episodes completed) are dropped.
  */
 internal suspend fun buildUnplayedEpisodesForQueue(
     podcasts: List<Podcast>,
@@ -720,40 +721,45 @@ internal suspend fun buildUnplayedEpisodesForQueue(
             .map { podcast ->
                 async {
                     semaphore.withPermit {
-                        unplayedEpisodesForPodcast(podcast, fetchEpisodes, fetchProgress)
+                        latestUnplayedEpisodeForPodcast(podcast, fetchEpisodes, fetchProgress)
                     }
                 }
             }
             .awaitAll()
-            .flatten()
+            .filterNotNull()
     }
 }
 
 /**
- * All non-completed episodes for a single [podcast], oldest -> newest by [Episode.pubDate]
- * (episodes with no pubDate sort last — we don't know how old they are). "Unplayed" means
- * no playback_progress row, or a row with `completed == false`; partially-played episodes
- * are included, per spec section 5.
+ * The single LATEST (newest by [Episode.pubDate]) non-completed episode for a
+ * [podcast], or null if none qualifies. "Unplayed" means no playback_progress row,
+ * or a row with `completed == false`; partially-played episodes are included, per
+ * spec section 5.
+ *
+ * Selection uses [Long.MIN_VALUE] as the sentinel for a missing/unparseable pubDate
+ * so such an episode never wins "newest" over a dated one. When EVERY candidate has
+ * no pubDate, `maxByOrNull` returns the first in feed document order — conventionally
+ * the newest, since feeds list newest-first.
  */
-private suspend fun unplayedEpisodesForPodcast(
+private suspend fun latestUnplayedEpisodeForPodcast(
     podcast: Podcast,
     fetchEpisodes: suspend (feedUrl: String, podcastId: String) -> Result<List<Episode>>,
     fetchProgress: suspend (podcastId: String) -> List<PlaybackProgressEntity>,
-): List<Episode> {
-    val feedUrl = podcast.feedUrl ?: return emptyList()
+): Episode? {
+    val feedUrl = podcast.feedUrl ?: return null
     val episodes = fetchEpisodes(feedUrl, podcast.id).getOrNull().orEmpty()
-    if (episodes.isEmpty()) return emptyList()
+    if (episodes.isEmpty()) return null
 
     val progressByEpisodeId = fetchProgress(podcast.id).associateBy { it.episodeId }
 
-    return episodes
+    val latest = episodes
         .filter { episode -> progressByEpisodeId[episode.id]?.completed != true }
-        .sortedBy { it.pubDate?.time ?: Long.MAX_VALUE }
-        .map { episode ->
-            if (episode.imageUrl == null && podcast.artworkUrl != null) {
-                episode.copy(imageUrl = podcast.artworkUrl)
-            } else {
-                episode
-            }
-        }
+        .maxByOrNull { it.pubDate?.time ?: Long.MIN_VALUE }
+        ?: return null
+
+    return if (latest.imageUrl == null && podcast.artworkUrl != null) {
+        latest.copy(imageUrl = podcast.artworkUrl)
+    } else {
+        latest
+    }
 }

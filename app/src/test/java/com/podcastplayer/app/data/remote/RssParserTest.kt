@@ -70,6 +70,31 @@ class RssParserTest {
     }
 
     @Test
+    fun `parses RFC 822 dates without seconds`() {
+        val episodes = episodesFor(listOf("Tue, 14 Jan 2025 08:00 +0000"))
+        assertNotNull(episodes[0].pubDate)
+        assertEquals(1736841600000L, episodes[0].pubDate!!.time)
+    }
+
+    @Test
+    fun `parses RFC 822 dates without a timezone`() {
+        // Parsed as device-local, so the exact instant is zone-dependent; only assert
+        // it resolves to a non-null date (relative ordering within one feed is what matters).
+        val episodes = episodesFor(listOf("Tue, 14 Jan 2025 08:00:00"))
+        assertNotNull(episodes[0].pubDate)
+    }
+
+    @Test
+    fun `a zoned timestamp keeps its offset and is not swallowed by the no-timezone pattern`() {
+        // Regression guard for pattern ordering: a non-UTC offset must survive. If the
+        // no-timezone "…HH:mm:ss" pattern caught this first it would drop the -0500 and
+        // (on a UTC runner) land 5 hours early.
+        val episodes = episodesFor(listOf("Tue, 14 Jan 2025 08:00:00 -0500"))
+        assertNotNull(episodes[0].pubDate)
+        assertEquals(1736859600000L, episodes[0].pubDate!!.time) // 08:00 -0500 == 13:00 UTC
+    }
+
+    @Test
     fun `parses ISO-8601 dates from Atom-style or non-compliant feeds`() {
         val episodes = episodesFor(
             listOf(

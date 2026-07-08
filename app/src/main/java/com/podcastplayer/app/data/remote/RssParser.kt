@@ -254,13 +254,25 @@ class RssParser(
     }
 
     companion object {
-        // RFC 822 (the RSS 2.0 spec's format) plus common non-compliant variants
-        // real feeds emit — some omit the weekday name entirely.
+        // RFC 822 (the RSS 2.0 spec's format) plus common non-compliant variants real
+        // feeds emit — some omit the weekday, the seconds, or the timezone entirely.
+        //
+        // ORDER IS LOAD-BEARING: SimpleDateFormat.parse ignores trailing input, so a
+        // less-specific pattern placed earlier would swallow a fuller timestamp and
+        // silently drop the tail. e.g. the no-timezone "…HH:mm:ss" would "match"
+        // "…08:00:00 +0000" and lose the offset. So: most specific (seconds + zone)
+        // first; no-timezone forms (parsed as device-local) strictly last.
         private val RFC_822_FORMATS = listOf(
             "EEE, dd MMM yyyy HH:mm:ss Z",
             "EEE, dd MMM yyyy HH:mm:ss z",
             "dd MMM yyyy HH:mm:ss Z",
             "dd MMM yyyy HH:mm:ss z",
+            // No seconds, but zoned.
+            "EEE, dd MMM yyyy HH:mm Z",
+            "EEE, dd MMM yyyy HH:mm z",
+            // No timezone at all (naive local time). Must stay last.
+            "EEE, dd MMM yyyy HH:mm:ss",
+            "dd MMM yyyy HH:mm:ss",
         )
 
         // XXX accepts "Z" or "+HH:MM"; XX accepts "Z" or "+HHMM" (no colon).
