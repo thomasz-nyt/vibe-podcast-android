@@ -70,6 +70,14 @@ class MediaStoreScanner(private val context: Context) {
         return MediaStore.createDeleteRequest(context.contentResolver, uris)
     }
 
+    /**
+     * Best-effort direct delete of a single MediaStore entry by content URI. Returns
+     * true if the file was removed (the current install owns it), false if it needs
+     * user consent (non-owned) or the delete failed. Callers batch the `false` URIs
+     * into a single [createDeleteRequest] consent dialog.
+     */
+    fun deleteDirect(uriString: String): Boolean = MediaStoreSaver.deleteByUri(context, uriString)
+
     private fun scanCollection(isVideo: Boolean): List<FoundMedia> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return emptyList()
 

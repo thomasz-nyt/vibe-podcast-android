@@ -483,16 +483,33 @@ fun PodcastNavHost(
                     var maintenanceMessage by remember { mutableStateOf<String?>(null) }
                     var pendingDeleteCount by remember { mutableStateOf(0) }
 
-                    // Receives the outcome of the system batch-delete consent dialog.
+                    // Receives the outcome of the system batch-delete consent dialog
+                    // (used by single delete, remove-all, and duplicate cleanup).
                     val deleteLauncher = rememberLauncherForActivityResult(
                         ActivityResultContracts.StartIntentSenderForResult()
                     ) { result ->
                         maintenanceMessage = if (result.resultCode == android.app.Activity.RESULT_OK) {
-                            "Removed $pendingDeleteCount duplicate file" +
-                                (if (pendingDeleteCount == 1) "." else "s.")
+                            "Removed $pendingDeleteCount file" + (if (pendingDeleteCount == 1) "." else "s.")
                         } else {
-                            "Cleanup canceled."
+                            "Canceled — those files were kept."
                         }
+                    }
+
+                    // Route content URIs that couldn't be deleted directly (owned by a
+                    // previous install) through the system consent dialog. Returns whether
+                    // a dialog was shown.
+                    fun requestConsentDelete(uris: List<String>): Boolean {
+                        if (uris.isEmpty()) return false
+                        val request = mediaScanner.createDeleteRequest(uris.map(Uri::parse))
+                        if (request == null) {
+                            maintenanceMessage = "Deleting files from a previous install needs Android 11 or newer."
+                            return false
+                        }
+                        pendingDeleteCount = uris.size
+                        deleteLauncher.launch(
+                            androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build()
+                        )
+                        return true
                     }
 
                     fun startCleanup() {
@@ -502,31 +519,49 @@ fun PodcastNavHost(
                                 maintenanceMessage = "No duplicate files found."
                                 return@launch
                             }
-                            val request = mediaScanner.createDeleteRequest(uris.map(Uri::parse))
-                            if (request == null) {
-                                maintenanceMessage = "Duplicate cleanup needs Android 11 or newer."
-                                return@launch
-                            }
-                            pendingDeleteCount = uris.size
-                            deleteLauncher.launch(
-                                androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build()
-                            )
+                            requestConsentDelete(uris)
                         }
                     }
 
                     // Restore/cleanup both need the media read permission to see files a
                     // previous install owned; route the intended action through the grant.
+                    // Remove-all sets [proceedOnDeny] so it still clears owned + tracked
+                    // downloads even if access is declined (only the dupe/orphan sweep needs it).
                     var pendingMediaAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+                    var pendingMediaActionProceedsOnDeny by remember { mutableStateOf(false) }
                     val permissionLauncher = rememberLauncherForActivityResult(
                         ActivityResultContracts.RequestMultiplePermissions()
                     ) { grants ->
                         val action = pendingMediaAction
+                        val proceedAnyway = pendingMediaActionProceedsOnDeny
                         pendingMediaAction = null
-                        if (grants.values.any { it }) {
+                        pendingMediaActionProceedsOnDeny = false
+                        if (grants.values.any { it } || proceedAnyway) {
                             action?.invoke()
                         } else {
                             maintenanceMessage =
                                 "Media access is needed to find files from a previous install."
+                        }
+                    }
+
+                    fun removeAllDownloads() {
+                        val run: () -> Unit = {
+                            scope.launch {
+                                val consent = podcastViewModel.deleteAllDownloads()
+                                if (!requestConsentDelete(consent)) {
+                                    maintenanceMessage = "All downloads removed."
+                                }
+                            }
+                            Unit
+                        }
+                        // Owned + tracked files are removed regardless; access just lets the
+                        // sweep also catch prior-install duplicates/orphans, so proceed on deny.
+                        if (podcastViewModel.hasMediaReadPermission()) {
+                            run()
+                        } else {
+                            pendingMediaAction = run
+                            pendingMediaActionProceedsOnDeny = true
+                            permissionLauncher.launch(podcastViewModel.mediaReadPermissions())
                         }
                     }
 
@@ -597,25 +632,22 @@ fun PodcastNavHost(
                         },
                         onDelete = { entry ->
                             scope.launch {
-                                when (entry.kind) {
+                                // Row + owned file are removed immediately; a file owned by a
+                                // previous install comes back as a consent URI → system dialog.
+                                val consent = when (entry.kind) {
                                     DownloadEntryUi.Kind.PODCAST ->
                                         podcastViewModel.deleteDownload(entry.episode.id)
                                     DownloadEntryUi.Kind.URL_AUDIO,
-                                    DownloadEntryUi.Kind.URL_VIDEO -> {
+                                    DownloadEntryUi.Kind.URL_VIDEO ->
                                         // entry.id format: "url:<entity-id>"
-                                        urlDownloadViewModel.deleteDownload(entry.id.removePrefix("url:"))
-                                    }
+                                        podcastViewModel.deleteUrlDownload(entry.id.removePrefix("url:"))
                                 }
+                                requestConsentDelete(consent)
                             }
                         },
                         onRetryUrlDownload = { id -> urlDownloadViewModel.retryDownload(id) },
                         onDeleteUrlDownload = { id -> urlDownloadViewModel.deleteDownload(id) },
-                        onDeleteAll = {
-                            scope.launch {
-                                podcastViewModel.deleteAllDownloads()
-                                urlDownloads.forEach { urlDownloadViewModel.deleteDownload(it.id) }
-                            }
-                        },
+                        onDeleteAll = { removeAllDownloads() },
                         restoreState = restoreState,
                         maintenanceMessage = maintenanceMessage,
                         onRestoreDownloads = {

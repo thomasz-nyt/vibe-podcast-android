@@ -16,6 +16,7 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -251,20 +252,46 @@ class UrlDownloadRepository(private val context: Context) {
     }
 
     /** Delete the row + the underlying file (if any). */
-    suspend fun delete(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+    /**
+     * Delete one URL download (row + file). Returns the content URI that couldn't be
+     * deleted directly (a MediaStore entry owned by a previous install) and needs the
+     * system consent dialog — empty if fully handled.
+     */
+    suspend fun delete(id: String): List<String> = withContext(Dispatchers.IO) {
         try {
             val entity = dao.getById(id)
-            entity?.localPath?.let { path ->
-                if (!MediaStoreSaver.deleteByUri(context, path)) {
-                    val file = File(path)
-                    if (file.exists()) file.delete()
-                }
-            }
+            val consent = entity?.localPath?.let { deleteLocalPayload(it) }
             dao.deleteById(id)
-            Result.success(Unit)
+            listOfNotNull(consent)
         } catch (e: Throwable) {
-            Result.failure(e)
+            emptyList()
         }
+    }
+
+    /** Delete every URL download (rows + files); returns all consent-needed URIs. */
+    suspend fun deleteAllReturningConsent(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val all = dao.observeAll().first()
+            val consent = all.mapNotNull { it.localPath?.let(::deleteLocalPayload) }
+            dao.deleteAll()
+            consent
+        } catch (e: Throwable) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Delete the on-disk payload for [path]. Returns the content URI (needs consent)
+     * when a non-owned MediaStore entry can't be deleted directly; null otherwise.
+     * See [DownloadManager.deleteLocalPayload] for why we don't `File.delete` a URI.
+     */
+    private fun deleteLocalPayload(path: String): String? {
+        if (path.startsWith("content://")) {
+            return if (MediaStoreSaver.deleteByUri(context, path)) null else path
+        }
+        val file = File(path)
+        if (file.exists()) file.delete()
+        return null
     }
 
     /**
