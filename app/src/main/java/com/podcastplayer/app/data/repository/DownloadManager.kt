@@ -227,6 +227,15 @@ class DownloadManager(private val context: Context) {
         }
     }
 
+    /**
+     * Forget every RSS download WITHOUT touching the media files. The files stay in
+     * the shared Vibe folders, where the restore flow (and just-in-time download
+     * reuse) can relink them later with zero network traffic.
+     */
+    suspend fun clearAllRowsKeepingFiles(): Unit = withContext(Dispatchers.IO) {
+        dao.deleteAll()
+    }
+
     /** Same as [deleteEpisode] but for every RSS download; returns all consent-needed URIs. */
     suspend fun deleteAllDownloads(): List<String> = withContext(Dispatchers.IO) {
         try {

@@ -268,6 +268,14 @@ class UrlDownloadRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Forget every URL download WITHOUT touching the media files — counterpart of
+     * [DownloadManager.clearAllRowsKeepingFiles] for the keep-files "Remove all".
+     */
+    suspend fun clearAllRowsKeepingFiles(): Unit = withContext(Dispatchers.IO) {
+        dao.deleteAll()
+    }
+
     /** Delete every URL download (rows + files); returns all consent-needed URIs. */
     suspend fun deleteAllReturningConsent(): List<String> = withContext(Dispatchers.IO) {
         try {

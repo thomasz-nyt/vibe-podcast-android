@@ -597,6 +597,19 @@ class PodcastViewModel(
     }
 
     /**
+     * Remove every download from the app's list but KEEP the media files on the
+     * phone. The Downloads list empties, while the files stay in the shared Vibe
+     * folders where "Restore previous downloads" (or a tap on any episode's
+     * download button, via just-in-time reuse) relinks them without re-downloading
+     * — the network-saving workflow for clearing the list without losing episodes.
+     */
+    suspend fun removeAllDownloadsKeepingFiles(): Unit = withContext(Dispatchers.IO) {
+        downloadManager.clearAllRowsKeepingFiles()
+        urlDownloadRepository?.clearAllRowsKeepingFiles()
+        refreshEpisodesWithDownloads()
+    }
+
+    /**
      * Remove ALL downloads and their files from the device — RSS + URL rows, and every
      * file in the Vibe MediaStore folders, INCLUDING orphans and the duplicate "(1)"
      * copies left by re-downloads across reinstalls. Owned files are deleted directly;

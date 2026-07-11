@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Podcasts
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -107,7 +108,13 @@ fun DownloadsScreen(
     onDelete: (DownloadEntryUi) -> Unit,
     onRetryUrlDownload: (String) -> Unit = {},
     onDeleteUrlDownload: (String) -> Unit = {},
-    onDeleteAll: () -> Unit,
+    /**
+     * Remove every download from the app's list. [deleteFiles] = true also deletes
+     * the media files from the phone (including prior-install duplicates); false
+     * keeps the files on disk so "Restore previous downloads" can relink them later
+     * without any re-downloading.
+     */
+    onDeleteAll: (deleteFiles: Boolean) -> Unit,
     onRestoreDownloads: () -> Unit = {},
     onCleanupDuplicates: () -> Unit = {},
     onDismissRestoreResult: () -> Unit = {},
@@ -273,16 +280,51 @@ fun DownloadsScreen(
     }
 
     if (showDeleteAllDialog) {
+        // remember{} inside the conditional resets the checkbox to the safe default
+        // (really delete) every time the dialog is opened.
+        var deleteFilesToo by remember { mutableStateOf(true) }
         AlertDialog(
             onDismissRequest = { showDeleteAllDialog = false },
             title = { Text("Remove all downloads") },
-            text = { Text("This will delete every downloaded file from this device.") },
+            text = {
+                Column {
+                    Text(
+                        if (deleteFilesToo) {
+                            "Every download is removed from the list and its media file is " +
+                                "deleted from this phone, including leftover duplicates."
+                        } else {
+                            "Downloads are removed from the list, but the media files stay " +
+                                "on this phone — use \"Restore previous downloads\" to bring " +
+                                "them back later without re-downloading."
+                        }
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { deleteFilesToo = !deleteFilesToo },
+                    ) {
+                        Checkbox(
+                            checked = deleteFilesToo,
+                            onCheckedChange = { deleteFilesToo = it },
+                        )
+                        Text(
+                            text = "Also delete media files from phone",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    onDeleteAll()
+                    onDeleteAll(deleteFilesToo)
                     showDeleteAllDialog = false
                 }) {
-                    Text("Remove all", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (deleteFilesToo) "Remove all" else "Remove, keep files",
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             },
             dismissButton = {
@@ -492,7 +534,7 @@ private fun RestoreDownloadsCard(
             Column(modifier = Modifier.weight(1f)) {
                 val (title, subtitle) = when (state) {
                     is RestoreDownloadsState.Idle ->
-                        "Reinstalled the app?" to
+                        "Reinstalled or cleared your list?" to
                             "Relink downloads already on this device instead of re-downloading them."
                     is RestoreDownloadsState.Running ->
                         "Restoring downloads…" to

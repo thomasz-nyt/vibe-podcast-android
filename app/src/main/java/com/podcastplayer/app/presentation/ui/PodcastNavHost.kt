@@ -523,10 +523,10 @@ fun PodcastNavHost(
                         }
                     }
 
-                    // Restore/cleanup both need the media read permission to see files a
-                    // previous install owned; route the intended action through the grant.
-                    // Remove-all sets [proceedOnDeny] so it still clears owned + tracked
-                    // downloads even if access is declined (only the dupe/orphan sweep needs it).
+                    // Media read permission widens restore/remove-all/cleanup to files a
+                    // previous install owned. Actions that also work on this install's own
+                    // files set [pendingMediaActionProceedsOnDeny] so declining the prompt
+                    // degrades gracefully instead of blocking them.
                     var pendingMediaAction by remember { mutableStateOf<(() -> Unit)?>(null) }
                     var pendingMediaActionProceedsOnDeny by remember { mutableStateOf(false) }
                     val permissionLauncher = rememberLauncherForActivityResult(
@@ -544,27 +544,33 @@ fun PodcastNavHost(
                         }
                     }
 
+                    // Offer the media-access prompt but run [action] even when access is
+                    // declined: restore and remove-all both work on this install's OWN
+                    // files without any permission — access only widens them to files a
+                    // previous install left behind (prior-install episodes / duplicates).
+                    fun runWithOptionalMediaAccess(action: () -> Unit) {
+                        if (podcastViewModel.hasMediaReadPermission()) {
+                            action()
+                        } else {
+                            pendingMediaAction = action
+                            pendingMediaActionProceedsOnDeny = true
+                            permissionLauncher.launch(podcastViewModel.mediaReadPermissions())
+                        }
+                    }
+
                     fun removeAllDownloads() {
-                        val run: () -> Unit = {
+                        runWithOptionalMediaAccess {
                             scope.launch {
                                 val consent = podcastViewModel.deleteAllDownloads()
                                 if (!requestConsentDelete(consent)) {
                                     maintenanceMessage = "All downloads removed."
                                 }
                             }
-                            Unit
-                        }
-                        // Owned + tracked files are removed regardless; access just lets the
-                        // sweep also catch prior-install duplicates/orphans, so proceed on deny.
-                        if (podcastViewModel.hasMediaReadPermission()) {
-                            run()
-                        } else {
-                            pendingMediaAction = run
-                            pendingMediaActionProceedsOnDeny = true
-                            permissionLauncher.launch(podcastViewModel.mediaReadPermissions())
                         }
                     }
 
+                    // Strict variant: the action is pointless without access (duplicate
+                    // cleanup must SEE non-owned files to delete them), so deny = stop.
                     fun withMediaPermission(action: () -> Unit) {
                         if (podcastViewModel.hasMediaReadPermission()) {
                             action()
@@ -647,11 +653,25 @@ fun PodcastNavHost(
                         },
                         onRetryUrlDownload = { id -> urlDownloadViewModel.retryDownload(id) },
                         onDeleteUrlDownload = { id -> urlDownloadViewModel.deleteDownload(id) },
-                        onDeleteAll = { removeAllDownloads() },
+                        onDeleteAll = { deleteFiles ->
+                            if (deleteFiles) {
+                                removeAllDownloads()
+                            } else {
+                                // Keep-files variant: clear the list only; the media stays on
+                                // the phone for Restore / instant re-download reuse.
+                                scope.launch {
+                                    podcastViewModel.removeAllDownloadsKeepingFiles()
+                                    maintenanceMessage = "List cleared — media files kept on this " +
+                                        "phone. Use \"Restore previous downloads\" to bring them back."
+                                }
+                            }
+                        },
                         restoreState = restoreState,
                         maintenanceMessage = maintenanceMessage,
                         onRestoreDownloads = {
-                            withMediaPermission { podcastViewModel.restorePreviousDownloads() }
+                            // Optional access: files kept via "Remove all → keep files" are
+                            // owned by this install and restore without any permission.
+                            runWithOptionalMediaAccess { podcastViewModel.restorePreviousDownloads() }
                         },
                         onCleanupDuplicates = { withMediaPermission { startCleanup() } },
                         onDismissRestoreResult = { podcastViewModel.dismissRestoreResult() },
