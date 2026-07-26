@@ -69,6 +69,12 @@ android {
     }
 }
 
+kapt {
+    arguments {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
@@ -119,6 +125,9 @@ dependencies {
     // mockable android.jar stubs XmlPullParserFactory, so RssParserTest injects
     // a KXmlParser directly.
     testImplementation("net.sf.kxml:kxml2:2.3.0")
+
+    androidTestImplementation("androidx.test:core:1.5.0")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

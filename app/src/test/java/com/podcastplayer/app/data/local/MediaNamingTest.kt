@@ -102,4 +102,34 @@ class MediaNamingTest {
         assertEquals(120, MediaNaming.sanitize("x".repeat(300)).length)
         assertEquals("vibe-media", MediaNaming.sanitize(""))
     }
+
+    @Test
+    fun `identified names round trip and keep suffix inside length limit`() {
+        val identity = MediaIdentity.rss("guid-123")
+        val name = MediaNaming.episodeDisplayName(
+            "Very long podcast ".repeat(20),
+            "Very long episode ".repeat(20),
+            "mp3",
+            identity,
+        )
+
+        assertTrue(name.length <= MediaNaming.MAX_DISPLAY_NAME_LENGTH)
+        assertEquals(identity, MediaIdentity.parse(name))
+        assertEquals(identity, MediaIdentity.parse(name.removeSuffix(".mp3") + " (12).mp3"))
+    }
+
+    @Test
+    fun `same title with different stable IDs gets different names`() {
+        val first = MediaNaming.episodeDisplayName("Show", "Update", "mp3", MediaIdentity.rss("one"))
+        val second = MediaNaming.episodeDisplayName("Show", "Update", "mp3", MediaIdentity.rss("two"))
+        assertNotEquals(first, second)
+    }
+
+    @Test
+    fun `adding identity preserves readable legacy title`() {
+        val identity = MediaIdentity.rss("guid")
+        val renamed = MediaNaming.addIdentity("Show - Episode (2).mp3", identity)
+        assertEquals("Show - Episode", MediaNaming.titleFromDisplayName(renamed))
+        assertEquals(identity, MediaIdentity.parse(renamed))
+    }
 }

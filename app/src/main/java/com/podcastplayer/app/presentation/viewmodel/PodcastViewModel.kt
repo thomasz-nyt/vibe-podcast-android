@@ -3,7 +3,13 @@ package com.podcastplayer.app.presentation.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.podcastplayer.app.data.local.MediaNaming
+import com.podcastplayer.app.data.local.MediaIdentity
+import com.podcastplayer.app.data.local.MediaFileCandidate
 import com.podcastplayer.app.data.local.MediaStoreScanner
+import com.podcastplayer.app.data.local.RestoreEpisodeCandidate
+import com.podcastplayer.app.data.local.RestorePlanner
+import com.podcastplayer.app.data.local.DuplicateCleanupPlan
+import com.podcastplayer.app.data.local.DuplicateCleanupPlanner
 import com.podcastplayer.app.data.local.OpmlExportSummary
 import com.podcastplayer.app.data.local.OpmlImportData
 import com.podcastplayer.app.data.local.OpmlManager
@@ -321,17 +327,7 @@ class PodcastViewModel(
 
     fun hasMediaReadPermission(): Boolean = mediaScanner?.hasReadPermission() == true
 
-    /**
-     * Relink media files already on disk (typically left behind by a previous
-     * install) instead of forcing the user to re-download everything.
-     *
-     * Pass 1 — for each subscribed podcast, fetch its feed and match episodes
-     * against the scanned files by [MediaNaming.matchKey]; hits are registered
-     * as downloads pointing at the existing file. Pass 2 — files that matched
-     * nothing (yt-dlp clips, episodes of not-yet-resubscribed shows) are
-     * imported as playable orphan entries, one per name key so "(1)"-style
-     * duplicate copies aren't imported alongside their original.
-     */
+    /** Exact stable identities restore automatically; legacy title guesses require confirmation. */
     fun restorePreviousDownloads() {
         val scanner = mediaScanner ?: return
         if (_restoreState.value is RestoreDownloadsState.Running) return
@@ -345,82 +341,98 @@ class PodcastViewModel(
                     return@launch
                 }
 
-                // Files already referenced by either downloads table are not
-                // candidates — and neither is any same-named duplicate of them.
                 val referencedUris = buildSet {
                     downloadManager.getAllDownloadedEntitiesFlow().first().forEach { add(it.localPath) }
                     urlDownloadRepository?.observeAll()?.first()?.forEach { it.localPath?.let(::add) }
                 }
-                val claimedUris = referencedUris.toMutableSet()
-                val claimedKeys = found
-                    .filter { it.uriString in referencedUris }
-                    .map { MediaNaming.matchKey(it.displayName) }
-                    .toMutableSet()
-
-                val audioByKey = found.filter { !it.isVideo }
-                    .groupBy { MediaNaming.matchKey(it.displayName) }
-
-                var restoredEpisodes = 0
+                val candidates = found.filterNot { it.uriString in referencedUris }.map { it.toCandidate() }
+                val episodeById = linkedMapOf<String, Episode>()
+                val restoreEpisodes = mutableListOf<RestoreEpisodeCandidate>()
                 for (podcast in savedPodcastsStorage.savedPodcasts.value) {
                     val feedUrl = podcast.feedUrl ?: continue
                     val episodes = repository.getEpisodes(feedUrl, podcast.id).getOrNull() ?: continue
                     for (episode in episodes) {
                         if (downloadManager.isEpisodeDownloaded(episode.id)) continue
-                        val key = MediaNaming.matchKey(
-                            MediaNaming.episodeDisplayName(podcast.title, episode.title, "mp3"),
+                        episodeById[episode.id] = episode
+                        restoreEpisodes += RestoreEpisodeCandidate(
+                            episodeId = episode.id,
+                            identity = MediaIdentity.rss(episode.id),
+                            legacyMatchKey = MediaNaming.matchKey(
+                                MediaNaming.episodeDisplayName(podcast.title, episode.title, "mp3"),
+                            ),
                         )
-                        val pick = audioByKey[key]
-                            ?.filter { it.uriString !in claimedUris }
-                            ?.minWithOrNull(
-                                compareBy(
-                                    { MediaNaming.hasDuplicateSuffix(it.displayName) },
-                                    { it.dateAddedSec },
-                                ),
-                            ) ?: continue
-                        claimedUris += pick.uriString
-                        claimedKeys += key
-                        downloadManager.registerExistingDownload(
-                            episode = episode,
-                            localPath = pick.uriString,
-                            fileSize = pick.sizeBytes,
-                        )
-                        // If an earlier restore imported this file as an orphan clip,
-                        // drop that row now that it has a proper episode identity.
-                        urlDownloadRepository?.removeRestoredFor(pick.uriString)
-                        restoredEpisodes++
                     }
                 }
 
-                // Orphans: at most one import per name key, skipping keys already
-                // represented in the library (their extra copies are duplicates
-                // for the cleaner, not new content).
+                val plan = RestorePlanner.plan(restoreEpisodes, candidates)
+                var restoredEpisodes = 0
+                plan.exactMatches.forEach { (episodeId, file) ->
+                    val episode = episodeById[episodeId] ?: return@forEach
+                    downloadManager.registerExistingDownload(episode, file.uriString, file.sizeBytes)
+                    urlDownloadRepository?.removeRestoredFor(file.uriString)
+                    restoredEpisodes++
+                }
+
                 var importedClips = 0
-                val orphanGroups = found
-                    .filter { it.uriString !in claimedUris }
-                    .groupBy { it.isVideo to MediaNaming.matchKey(it.displayName) }
-                for ((groupKey, candidates) in orphanGroups) {
-                    if (groupKey.second in claimedKeys) continue
-                    val pick = candidates.minWithOrNull(
-                        compareBy(
-                            { MediaNaming.hasDuplicateSuffix(it.displayName) },
-                            { it.dateAddedSec },
-                        ),
-                    ) ?: continue
+                val unidentified = plan.unidentified + plan.legacySuggestions.map { it.file }
+                for (file in unidentified.distinctBy { it.uriString }) {
                     val imported = urlDownloadRepository?.importRestored(
-                        displayName = pick.displayName,
-                        uriString = pick.uriString,
-                        sizeBytes = pick.sizeBytes,
-                        isVideo = pick.isVideo,
+                        displayName = "Unidentified - ${MediaNaming.titleFromDisplayName(file.displayName)}",
+                        uriString = file.uriString,
+                        sizeBytes = file.sizeBytes,
+                        isVideo = file.isVideo,
                     ) == true
                     if (imported) importedClips++
                 }
 
                 refreshEpisodesWithDownloads()
-                _restoreState.value = RestoreDownloadsState.Done(restoredEpisodes, importedClips)
+                val suggestions = plan.legacySuggestions.mapNotNull { suggestion ->
+                    episodeById[suggestion.episodeId]?.let { episode ->
+                        LegacyRestoreMatch(
+                            episode = episode,
+                            file = suggestion.file,
+                            identifiedDisplayName = MediaNaming.addIdentity(
+                                suggestion.file.displayName,
+                                MediaIdentity.rss(episode.id),
+                            ),
+                        )
+                    }
+                }
+                _restoreState.value = if (suggestions.isEmpty()) {
+                    RestoreDownloadsState.Done(restoredEpisodes, importedClips)
+                } else {
+                    RestoreDownloadsState.ReviewLegacy(restoredEpisodes, importedClips, suggestions)
+                }
             } catch (t: Throwable) {
                 _restoreState.value = RestoreDownloadsState.Failed(t.message ?: "Restore failed")
             }
         }
+    }
+
+    suspend fun applyLegacyRestoreMatch(match: LegacyRestoreMatch): MediaStoreScanner.MutationResult =
+        withContext(Dispatchers.IO) {
+            val scanner = mediaScanner ?: return@withContext MediaStoreScanner.MutationResult.Failed
+            when (val result = scanner.rename(match.file.uriString, match.identifiedDisplayName)) {
+                MediaStoreScanner.MutationResult.Success -> {
+                    downloadManager.registerExistingDownload(
+                        episode = match.episode,
+                        localPath = match.file.uriString,
+                        fileSize = match.file.sizeBytes,
+                    )
+                    urlDownloadRepository?.removeRestoredFor(match.file.uriString)
+                    refreshEpisodesWithDownloads()
+                    result
+                }
+                else -> result
+            }
+        }
+
+    fun finishLegacyRestoreReview(confirmedCount: Int) {
+        val state = _restoreState.value as? RestoreDownloadsState.ReviewLegacy ?: return
+        _restoreState.value = RestoreDownloadsState.Done(
+            restoredEpisodes = state.restoredEpisodes + confirmedCount,
+            importedClips = (state.importedClips - confirmedCount).coerceAtLeast(0),
+        )
     }
 
     /**
@@ -429,28 +441,21 @@ class PodcastViewModel(
      * keeping one copy per name key. The UI feeds these into the system's
      * batch-delete consent dialog.
      */
-    suspend fun planDuplicateCleanup(): List<String> = withContext(Dispatchers.IO) {
-        val scanner = mediaScanner ?: return@withContext emptyList()
+    suspend fun planDuplicateCleanup(): DuplicateCleanupPlan = withContext(Dispatchers.IO) {
+        val scanner = mediaScanner ?: return@withContext DuplicateCleanupPlan(emptyList(), emptyList())
         val found = scanner.scanAll()
         val referencedUris = buildSet {
             downloadManager.getAllDownloadedEntitiesFlow().first().forEach { add(it.localPath) }
             urlDownloadRepository?.observeAll()?.first()?.forEach { it.localPath?.let(::add) }
         }
-        found
-            .groupBy { it.isVideo to MediaNaming.matchKey(it.displayName) }
-            .values
-            .filter { it.size > 1 }
-            .flatMap { group ->
-                val keep = group.firstOrNull { it.uriString in referencedUris }
-                    ?: group.minWithOrNull(
-                        compareBy(
-                            { MediaNaming.hasDuplicateSuffix(it.displayName) },
-                            { it.dateAddedSec },
-                        ),
-                    )
-                group.filter { it !== keep && it.uriString !in referencedUris }
-                    .map { it.uriString }
-            }
+        val hashableSizes = found.groupBy { it.sizeBytes }.filterValues { it.size > 1 }.keys
+        val candidates = found.map { media ->
+            media.toCandidate(
+                isProtected = media.uriString in referencedUris,
+                sha256 = if (media.sizeBytes in hashableSizes) scanner.sha256(media.uriString) else null,
+            )
+        }
+        DuplicateCleanupPlanner.plan(candidates)
     }
 
     /**
@@ -732,10 +737,35 @@ sealed class RestoreDownloadsState {
     data object Idle : RestoreDownloadsState()
     data object Running : RestoreDownloadsState()
 
+    data class ReviewLegacy(
+        val restoredEpisodes: Int,
+        val importedClips: Int,
+        val suggestions: List<LegacyRestoreMatch>,
+    ) : RestoreDownloadsState()
+
     /** [restoredEpisodes] relinked to subscriptions; [importedClips] kept as orphan entries. */
     data class Done(val restoredEpisodes: Int, val importedClips: Int) : RestoreDownloadsState()
     data class Failed(val message: String) : RestoreDownloadsState()
 }
+
+data class LegacyRestoreMatch(
+    val episode: Episode,
+    val file: MediaFileCandidate,
+    val identifiedDisplayName: String,
+)
+
+private fun MediaStoreScanner.FoundMedia.toCandidate(
+    isProtected: Boolean = false,
+    sha256: String? = null,
+): MediaFileCandidate = MediaFileCandidate(
+    uriString = uriString,
+    displayName = displayName,
+    sizeBytes = sizeBytes,
+    dateAddedSec = dateAddedSec,
+    isVideo = isVideo,
+    sha256 = sha256,
+    isProtected = isProtected,
+)
 
 /** Bound on simultaneous RSS feed fetches when building a queue playlist. */
 private const val MAX_CONCURRENT_QUEUE_FEED_FETCHES = 4

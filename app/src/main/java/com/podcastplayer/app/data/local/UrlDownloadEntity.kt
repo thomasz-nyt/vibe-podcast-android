@@ -44,4 +44,10 @@ data class UrlDownloadEntity(
     val createdAtMs: Long,
     /** epoch millis; null while pending/in-progress. */
     val completedAtMs: Long?,
+    /** Manual items are pinned; only AUTO items participate in retention. */
+    val origin: String = DownloadOrigin.MANUAL.name,
+    /** RSS podcast that routed this episode through yt-dlp, if any. */
+    val podcastId: String? = null,
+    /** Original episode publication time for per-podcast ordering, if any. */
+    val episodePubDateMs: Long? = null,
 )

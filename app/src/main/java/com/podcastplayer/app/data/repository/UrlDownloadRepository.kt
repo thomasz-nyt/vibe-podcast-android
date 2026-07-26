@@ -3,6 +3,7 @@ package com.podcastplayer.app.data.repository
 import android.content.Context
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.DownloadOrigin
 import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.UrlDownloadDao
@@ -10,6 +11,7 @@ import com.podcastplayer.app.data.local.UrlDownloadEntity
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.MediaType
 import com.podcastplayer.app.service.UrlDownloadService
+import com.podcastplayer.app.service.AutoDownloadRetentionManager
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -108,6 +110,9 @@ class UrlDownloadRepository(private val context: Context) {
         rawUrl: String,
         mediaType: MediaType,
         prefetchedMetadata: UrlMetadata? = null,
+        origin: DownloadOrigin = DownloadOrigin.MANUAL,
+        podcastId: String? = null,
+        episodePubDateMs: Long? = null,
     ): String = withContext(Dispatchers.IO) {
         val mediaTag = mediaType.tag
         val id = UrlValidator.stableId(rawUrl, mediaTag)
@@ -135,6 +140,9 @@ class UrlDownloadRepository(private val context: Context) {
             errorMessage = null,
             createdAtMs = System.currentTimeMillis(),
             completedAtMs = null,
+            origin = origin.name,
+            podcastId = podcastId,
+            episodePubDateMs = episodePubDateMs,
         )
         dao.upsert(entity)
         id
@@ -185,6 +193,7 @@ class UrlDownloadRepository(private val context: Context) {
     }
 
     suspend fun markCompleted(id: String, localPath: String, fileSize: Long) {
+        val entity = dao.getById(id)
         dao.markCompleted(
             id = id,
             status = UrlDownloadStatus.COMPLETED.name,
@@ -192,6 +201,9 @@ class UrlDownloadRepository(private val context: Context) {
             fileSize = fileSize,
             completedAtMs = System.currentTimeMillis(),
         )
+        if (entity?.origin == DownloadOrigin.AUTO.name && entity.podcastId != null) {
+            AutoDownloadRetentionManager(context).trimPodcast(entity.podcastId)
+        }
     }
 
     /**

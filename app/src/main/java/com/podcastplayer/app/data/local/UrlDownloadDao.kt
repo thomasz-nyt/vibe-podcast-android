@@ -21,6 +21,15 @@ interface UrlDownloadDao {
     @Query("SELECT * FROM url_downloads WHERE id = :id")
     fun observeById(id: String): Flow<UrlDownloadEntity?>
 
+    @Query("SELECT * FROM url_downloads")
+    suspend fun getAllOnce(): List<UrlDownloadEntity>
+
+    @Query("SELECT * FROM url_downloads WHERE podcastId = :podcastId AND origin = 'AUTO' AND status = 'COMPLETED'")
+    suspend fun getCompletedAutoByPodcast(podcastId: String): List<UrlDownloadEntity>
+
+    @Query("SELECT DISTINCT podcastId FROM url_downloads WHERE origin = 'AUTO' AND podcastId IS NOT NULL")
+    suspend fun getAutoPodcastIds(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: UrlDownloadEntity)
 

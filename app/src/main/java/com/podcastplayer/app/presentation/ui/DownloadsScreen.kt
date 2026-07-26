@@ -54,9 +54,11 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.data.local.UrlDownloadEntity
+import com.podcastplayer.app.data.local.DuplicateCleanupPlan
 import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.presentation.viewmodel.RestoreDownloadsState
+import com.podcastplayer.app.presentation.viewmodel.LegacyRestoreMatch
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 
 /**
@@ -116,6 +118,7 @@ fun DownloadsScreen(
      */
     onDeleteAll: (deleteFiles: Boolean) -> Unit,
     onRestoreDownloads: () -> Unit = {},
+    onReviewLegacyMatches: () -> Unit = {},
     onCleanupDuplicates: () -> Unit = {},
     onDismissRestoreResult: () -> Unit = {},
     onDismissMaintenanceMessage: () -> Unit = {},
@@ -188,6 +191,7 @@ fun DownloadsScreen(
                     RestoreDownloadsCard(
                         state = restoreState,
                         onRestore = onRestoreDownloads,
+                        onReviewLegacy = onReviewLegacyMatches,
                         onDismiss = onDismissRestoreResult,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
@@ -220,6 +224,7 @@ fun DownloadsScreen(
                             RestoreDownloadsCard(
                                 state = restoreState,
                                 onRestore = onRestoreDownloads,
+                                onReviewLegacy = onReviewLegacyMatches,
                                 onDismiss = onDismissRestoreResult,
                             )
                         }
@@ -503,6 +508,7 @@ private fun DownloadRow(
 private fun RestoreDownloadsCard(
     state: RestoreDownloadsState,
     onRestore: () -> Unit,
+    onReviewLegacy: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -539,6 +545,11 @@ private fun RestoreDownloadsCard(
                     is RestoreDownloadsState.Running ->
                         "Restoring downloads…" to
                             "Scanning your media folders and matching episodes."
+                    is RestoreDownloadsState.ReviewLegacy ->
+                        "Legacy matches need review" to
+                            "${state.suggestions.size} title-based suggestion" +
+                                (if (state.suggestions.size == 1) "" else "s") +
+                                " found. Nothing is linked without your confirmation."
                     is RestoreDownloadsState.Done ->
                         if (state.restoredEpisodes == 0 && state.importedClips == 0) {
                             "Nothing to restore" to "No previously downloaded files were found."
@@ -576,6 +587,8 @@ private fun RestoreDownloadsCard(
             when (state) {
                 is RestoreDownloadsState.Idle -> VibeChip(label = "Restore", onClick = onRestore)
                 is RestoreDownloadsState.Running -> Unit
+                is RestoreDownloadsState.ReviewLegacy ->
+                    VibeChip(label = "Review", onClick = onReviewLegacy)
                 is RestoreDownloadsState.Done,
                 is RestoreDownloadsState.Failed -> VibeChip(label = "Dismiss", onClick = onDismiss)
             }
@@ -644,5 +657,154 @@ private fun KindBadge(kind: DownloadEntryUi.Kind) {
             letterSpacing = 1.2.sp,
             color = colors.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+fun LegacyRestoreReviewDialog(
+    matches: List<LegacyRestoreMatch>,
+    onConfirm: (List<LegacyRestoreMatch>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var selected by remember(matches) { mutableStateOf(emptySet<String>()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review legacy matches") },
+        text = {
+            LazyColumn(modifier = Modifier.height(360.dp)) {
+                item {
+                    Text(
+                        "These files have no stable identity. Select only matches you recognize; " +
+                            "confirmed files will be renamed before they are linked.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                items(matches, key = { it.file.uriString }) { match ->
+                    val checked = match.file.uriString in selected
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selected = if (checked) selected - match.file.uriString
+                                else selected + match.file.uriString
+                            }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = {
+                                selected = if (checked) selected - match.file.uriString
+                                else selected + match.file.uriString
+                            },
+                        )
+                        Column {
+                            Text(match.episode.title, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "${match.file.displayName} · ${formatBytes(match.file.sizeBytes)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected.isNotEmpty(),
+                onClick = { onConfirm(matches.filter { it.file.uriString in selected }) },
+            ) { Text("Confirm selected") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep unidentified") } },
+    )
+}
+
+@Composable
+fun DuplicateCleanupDialog(
+    plan: DuplicateCleanupPlan,
+    onConfirm: (List<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val allItems = remember(plan) {
+        plan.confirmed.flatMap { it.items } + plan.ambiguous.flatMap { it.items }
+    }
+    var selected by remember(plan) { mutableStateOf(plan.defaultDeleteUris.toSet()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review duplicate files") },
+        text = {
+            LazyColumn(modifier = Modifier.height(420.dp)) {
+                if (plan.confirmed.isNotEmpty()) {
+                    item { Text("Confirmed duplicates", fontWeight = FontWeight.SemiBold) }
+                    plan.confirmed.forEach { group ->
+                        items(group.items, key = { "confirmed:${it.file.uriString}" }) { item ->
+                            DuplicateChoiceRow(item, item.file.uriString in selected) { checked ->
+                                selected = if (checked) selected + item.file.uriString
+                                else selected - item.file.uriString
+                            }
+                        }
+                    }
+                }
+                if (plan.ambiguous.isNotEmpty()) {
+                    item {
+                        Spacer(Modifier.height(10.dp))
+                        Text("Ambiguous legacy groups", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Same title, different content. Nothing here is selected automatically.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    plan.ambiguous.forEach { group ->
+                        item { Text(group.normalizedTitle, style = MaterialTheme.typography.labelMedium) }
+                        items(group.items, key = { "ambiguous:${it.file.uriString}" }) { item ->
+                            DuplicateChoiceRow(item, item.file.uriString in selected) { checked ->
+                                selected = if (checked) selected + item.file.uriString
+                                else selected - item.file.uriString
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selected.isNotEmpty(),
+                onClick = { onConfirm(allItems.map { it.file.uriString }.filter { it in selected }) },
+            ) { Text("Delete selected") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DuplicateChoiceRow(
+    item: com.podcastplayer.app.data.local.DuplicateReviewItem,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = item.enabled) { onCheckedChange(!checked) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = checked, enabled = item.enabled, onCheckedChange = onCheckedChange)
+        Column {
+            Text(item.file.displayName, style = MaterialTheme.typography.bodySmall)
+            val date = java.text.DateFormat.getDateInstance().format(java.util.Date(item.file.dateAddedSec * 1000L))
+            val status = when {
+                item.file.isProtected -> " · In use"
+                !item.enabled -> " · Kept copy"
+                else -> ""
+            }
+            Text(
+                "${formatBytes(item.file.sizeBytes)} · $date$status",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

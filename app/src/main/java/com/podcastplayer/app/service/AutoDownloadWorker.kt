@@ -10,6 +10,9 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.DownloadOrigin
+import com.podcastplayer.app.data.local.AutoDownloadRetentionPlanner
+import com.podcastplayer.app.data.local.RestoreEpisodeCandidateForRetention
 import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
@@ -127,6 +130,8 @@ class AutoDownloadWorker(
             val downloadManager = DownloadManager(context)
             val urlDownloadRepository = UrlDownloadRepository(context)
             val downloadedDao = DatabaseProvider.getDatabase(context).downloadedEpisodeDao()
+            val retentionLimit = AppSettings.getInstance(context).autoDownloadRetentionLimit.value
+            val retentionManager = AutoDownloadRetentionManager(context)
 
             val cutoffMs = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(MAX_AGE_DAYS)
             var queuedUrlDownloads = false
@@ -145,7 +150,14 @@ class AutoDownloadWorker(
                     pubMs >= cutoffMs && progressByEpisodeId[ep.id]?.completed != true
                 }
 
-                for (episode in freshEpisodes) {
+                val selectedIds = AutoDownloadRetentionPlanner.selectEligibleEpisodes(
+                    episodes = freshEpisodes.map {
+                        RestoreEpisodeCandidateForRetention(it.id, requireNotNull(it.pubDate).time)
+                    },
+                    limit = retentionLimit,
+                ).mapTo(hashSetOf()) { it.id }
+
+                for (episode in freshEpisodes.filter { it.id in selectedIds }) {
                     if (UrlSource.classify(episode.audioUrl) == UrlSource.YOUTUBE) {
                         urlDownloadRepository.enqueue(
                             rawUrl = episode.audioUrl,
@@ -156,6 +168,9 @@ class AutoDownloadWorker(
                                 thumbnailUrl = episode.imageUrl,
                                 durationMs = episode.duration,
                             ),
+                            origin = DownloadOrigin.AUTO,
+                            podcastId = podcast.id,
+                            episodePubDateMs = episode.pubDate?.time,
                         )
                         queuedUrlDownloads = true
                         continue
@@ -163,7 +178,12 @@ class AutoDownloadWorker(
                     if (downloadedDao.isEpisodeDownloaded(episode.id)) continue
                     val withArtwork = ensureArtwork(episode, podcast)
                     // Result is ignored — periodic work; we'll try again next interval.
-                    downloadManager.downloadEpisode(withArtwork, podcastTitle = podcast.title)
+                    val result = downloadManager.downloadEpisode(
+                        episode = withArtwork,
+                        podcastTitle = podcast.title,
+                        origin = DownloadOrigin.AUTO,
+                    )
+                    if (result.isSuccess) retentionManager.trimPodcast(podcast.id, retentionLimit)
                 }
             }
             if (queuedUrlDownloads) urlDownloadRepository.startPump()
