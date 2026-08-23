@@ -75,6 +75,60 @@ class DownloadPlannersTest {
     }
 
     @Test
+    fun `ambiguous selection always leaves one item available`() {
+        val plan = DuplicateCleanupPlanner.plan(
+            listOf(
+                file("one", "Episode.mp3", size = 100, hash = "aaa"),
+                file("two", "Episode (1).mp3", size = 100, hash = "bbb"),
+                file("three", "Episode (2).mp3", size = 100, hash = "ccc"),
+            ),
+        )
+        val group = plan.ambiguous.single()
+
+        assertTrue(group.canToggleDeletion("one", emptySet()))
+        assertTrue(group.canToggleDeletion("two", setOf("one")))
+        assertFalse(group.canToggleDeletion("three", setOf("one", "two")))
+        assertTrue(group.canToggleDeletion("one", setOf("one", "two")))
+        assertTrue(group.canToggleDeletion("three", setOf("two")))
+    }
+
+    @Test
+    fun `protected ambiguous item allows every unprotected item to be selected`() {
+        val plan = DuplicateCleanupPlanner.plan(
+            listOf(
+                file("protected", "Episode.mp3", size = 90, hash = "aaa", protected = true),
+                file("one", "Episode (1).mp3", size = 100, hash = "bbb"),
+                file("two", "Episode (2).mp3", size = 110, hash = "ccc"),
+            ),
+        )
+        val group = plan.ambiguous.single()
+
+        assertFalse(group.canToggleDeletion("protected", emptySet()))
+        assertTrue(group.canToggleDeletion("one", emptySet()))
+        assertTrue(group.canToggleDeletion("two", setOf("one")))
+        assertEquals(listOf("one", "two"), plan.sanitizeDeleteUris(listOf("protected", "one", "two")))
+    }
+
+    @Test
+    fun `sanitization deterministically keeps one ambiguous file`() {
+        val small = file("small", "Episode.mp3", size = 100, hash = "aaa")
+        val large = file("large", "Episode (1).mp3", size = 200, hash = "bbb")
+        val plan = DuplicateCleanupPlanner.plan(listOf(small, large))
+
+        assertEquals(listOf("small"), plan.sanitizeDeleteUris(listOf("small", "large")))
+    }
+
+    @Test
+    fun `sanitization rejects protected kept and unknown files`() {
+        val identity = MediaIdentity.rss("same")
+        val referenced = file("ref", "Episode${identity.suffix}.mp3", protected = true)
+        val duplicate = file("dup", "Episode${identity.suffix} (1).mp3")
+        val plan = DuplicateCleanupPlanner.plan(listOf(referenced, duplicate))
+
+        assertEquals(listOf("dup"), plan.sanitizeDeleteUris(listOf("ref", "dup", "unknown")))
+    }
+
+    @Test
     fun `keep selection prefers largest then unsuffixed then oldest`() {
         val identity = MediaIdentity.rss("same")
         val small = file("small", "Ep${identity.suffix}.mp3", size = 50, date = 1)

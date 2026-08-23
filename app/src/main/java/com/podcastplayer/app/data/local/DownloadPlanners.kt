@@ -78,7 +78,21 @@ data class ConfirmedDuplicateGroup(
 data class AmbiguousLegacyGroup(
     val normalizedTitle: String,
     val items: List<DuplicateReviewItem>,
-)
+) {
+    /**
+     * Whether [uriString] may be toggled in the delete selection without allowing
+     * every physical file in this ambiguous group to be selected at once.
+     * Selected items remain toggleable so the user can always deselect them.
+     */
+    fun canToggleDeletion(uriString: String, selectedUris: Set<String>): Boolean {
+        val item = items.firstOrNull { it.file.uriString == uriString } ?: return false
+        if (!item.enabled) return false
+        if (uriString in selectedUris) return true
+        return items.any { other ->
+            other.file.uriString != uriString && other.file.uriString !in selectedUris
+        }
+    }
+}
 
 data class DuplicateCleanupPlan(
     val confirmed: List<ConfirmedDuplicateGroup>,
@@ -88,6 +102,26 @@ data class DuplicateCleanupPlan(
         get() = confirmed.flatMap { group ->
             group.items.filter { it.selectedByDefault && it.enabled }.map { it.file.uriString }
         }
+
+    /**
+     * Restrict a requested delete selection to eligible plan items and always
+     * retain at least one physical file from every ambiguous group.
+     */
+    fun sanitizeDeleteUris(requestedUris: Collection<String>): List<String> {
+        val requested = requestedUris.toSet()
+        val allItems = confirmed.flatMap { it.items } + ambiguous.flatMap { it.items }
+        val selected = allItems.asSequence()
+            .filter { it.enabled && it.file.uriString in requested }
+            .mapTo(linkedSetOf()) { it.file.uriString }
+
+        ambiguous.forEach { group ->
+            if (group.items.isNotEmpty() && group.items.all { it.file.uriString in selected }) {
+                val keep = group.items.map { it.file }.maxWithOrNull(stableKeepComparator())
+                keep?.let { selected.remove(it.uriString) }
+            }
+        }
+        return selected.toList()
+    }
 }
 
 object DuplicateCleanupPlanner {

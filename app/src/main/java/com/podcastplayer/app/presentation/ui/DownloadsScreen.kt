@@ -727,9 +727,6 @@ fun DuplicateCleanupDialog(
     onConfirm: (List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val allItems = remember(plan) {
-        plan.confirmed.flatMap { it.items } + plan.ambiguous.flatMap { it.items }
-    }
     var selected by remember(plan) { mutableStateOf(plan.defaultDeleteUris.toSet()) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -759,8 +756,14 @@ fun DuplicateCleanupDialog(
                     plan.ambiguous.forEach { group ->
                         item { Text(group.normalizedTitle, style = MaterialTheme.typography.labelMedium) }
                         items(group.items, key = { "ambiguous:${it.file.uriString}" }) { item ->
-                            DuplicateChoiceRow(item, item.file.uriString in selected) { checked ->
-                                selected = if (checked) selected + item.file.uriString
+                            val isChecked = item.file.uriString in selected
+                            val selectionEnabled = group.canToggleDeletion(item.file.uriString, selected)
+                            DuplicateChoiceRow(
+                                item = item,
+                                checked = isChecked,
+                                enabled = selectionEnabled,
+                            ) { newChecked ->
+                                selected = if (newChecked) selected + item.file.uriString
                                 else selected - item.file.uriString
                             }
                         }
@@ -769,9 +772,10 @@ fun DuplicateCleanupDialog(
             }
         },
         confirmButton = {
+            val safeSelection = plan.sanitizeDeleteUris(selected)
             TextButton(
-                enabled = selected.isNotEmpty(),
-                onClick = { onConfirm(allItems.map { it.file.uriString }.filter { it in selected }) },
+                enabled = safeSelection.isNotEmpty(),
+                onClick = { onConfirm(safeSelection) },
             ) { Text("Delete selected") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -782,22 +786,27 @@ fun DuplicateCleanupDialog(
 private fun DuplicateChoiceRow(
     item: com.podcastplayer.app.data.local.DuplicateReviewItem,
     checked: Boolean,
+    enabled: Boolean = item.enabled,
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = item.enabled) { onCheckedChange(!checked) }
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(checked = checked, enabled = item.enabled, onCheckedChange = onCheckedChange)
+        Checkbox(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = if (enabled) onCheckedChange else null,
+        )
         Column {
             Text(item.file.displayName, style = MaterialTheme.typography.bodySmall)
             val date = java.text.DateFormat.getDateInstance().format(java.util.Date(item.file.dateAddedSec * 1000L))
             val status = when {
                 item.file.isProtected -> " · In use"
-                !item.enabled -> " · Kept copy"
+                !enabled -> " · Kept copy"
                 else -> ""
             }
             Text(
