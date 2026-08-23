@@ -6,6 +6,8 @@ import android.os.Environment
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.DownloadedEpisodeDao
 import com.podcastplayer.app.data.local.DownloadedEpisodeEntity
+import com.podcastplayer.app.data.local.DownloadOrigin
+import com.podcastplayer.app.data.local.MediaIdentity
 import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.MediaStoreScanner
@@ -35,7 +37,8 @@ class DownloadManager(private val context: Context) {
     suspend fun downloadEpisode(
         episode: Episode,
         podcastTitle: String? = null,
-        onProgress: (Float) -> Unit = {}
+        origin: DownloadOrigin = DownloadOrigin.MANUAL,
+        onProgress: (Float) -> Unit = {},
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             // Path-on-disk name still uses a hash for the legacy app-private path
@@ -67,6 +70,7 @@ class DownloadManager(private val context: Context) {
                     val entity = episode.toEntity(
                         localPath = reusable.uriString,
                         fileSize = reusable.sizeBytes,
+                        origin = origin,
                     )
                     dao.insertEpisode(entity)
                     return@withContext Result.success(reusable.uriString)
@@ -76,7 +80,11 @@ class DownloadManager(private val context: Context) {
                     ?: return@withContext Result.failure(
                         java.io.IOException("Could not save audio to MediaStore"),
                     )
-                val entity = episode.toEntity(localPath = saved.uri.toString(), fileSize = saved.sizeBytes)
+                val entity = episode.toEntity(
+                    localPath = saved.uri.toString(),
+                    fileSize = saved.sizeBytes,
+                    origin = origin,
+                )
                 dao.insertEpisode(entity)
                 Result.success(saved.uri.toString())
             } else {
@@ -84,11 +92,21 @@ class DownloadManager(private val context: Context) {
                 // Files won't be visible to other apps, but neither would they without
                 // the legacy WRITE_EXTERNAL_STORAGE permission flow.
                 val localFile = File(downloadDir, legacyFileName)
-                if (localFile.exists()) return@withContext Result.success(localFile.absolutePath)
+                if (localFile.exists()) {
+                    dao.insertEpisode(
+                        episode.toEntity(
+                            localPath = localFile.absolutePath,
+                            fileSize = localFile.length(),
+                            origin = origin,
+                        )
+                    )
+                    return@withContext Result.success(localFile.absolutePath)
+                }
                 downloadIntoFile(episode, localFile, onProgress)
                 val entity = episode.toEntity(
                     localPath = localFile.absolutePath,
                     fileSize = localFile.length(),
+                    origin = origin,
                 )
                 dao.insertEpisode(entity)
                 Result.success(localFile.absolutePath)
@@ -211,6 +229,8 @@ class DownloadManager(private val context: Context) {
      *  the domain [Episode] doesn't carry. */
     fun getAllDownloadedEntitiesFlow(): Flow<List<DownloadedEpisodeEntity>> = dao.getAllEpisodes()
 
+    suspend fun getAllDownloadedEntities(): List<DownloadedEpisodeEntity> = dao.getAllEpisodesOnce()
+
     /**
      * Delete one downloaded episode (row + file). Returns the content URI that
      * couldn't be deleted directly (a MediaStore entry owned by a previous install)
@@ -286,7 +306,12 @@ class DownloadManager(private val context: Context) {
      */
     private fun buildDisplayName(episode: Episode, podcastTitle: String?): String {
         val extension = guessExtension(episode.audioUrl) ?: "mp3"
-        return MediaNaming.episodeDisplayName(podcastTitle, episode.title, extension)
+        return MediaNaming.episodeDisplayName(
+            podcastTitle = podcastTitle,
+            episodeTitle = episode.title,
+            extension = extension,
+            identity = MediaIdentity.rss(episode.id),
+        )
     }
 
     /**
@@ -298,7 +323,13 @@ class DownloadManager(private val context: Context) {
         localPath: String,
         fileSize: Long,
     ): Unit = withContext(Dispatchers.IO) {
-        dao.insertEpisode(episode.toEntity(localPath = localPath, fileSize = fileSize))
+        dao.insertEpisode(
+            episode.toEntity(
+                localPath = localPath,
+                fileSize = fileSize,
+                origin = DownloadOrigin.MANUAL,
+            )
+        )
     }
 
     private fun guessExtension(url: String): String? {
@@ -311,7 +342,11 @@ class DownloadManager(private val context: Context) {
         }
     }
 
-    private fun Episode.toEntity(localPath: String, fileSize: Long): DownloadedEpisodeEntity {
+    private fun Episode.toEntity(
+        localPath: String,
+        fileSize: Long,
+        origin: DownloadOrigin,
+    ): DownloadedEpisodeEntity {
         return DownloadedEpisodeEntity(
             id = id,
             podcastId = podcastId,
@@ -322,7 +357,8 @@ class DownloadManager(private val context: Context) {
             duration = duration,
             localPath = localPath,
             fileSize = fileSize,
-            downloadDate = System.currentTimeMillis()
+            downloadDate = System.currentTimeMillis(),
+            origin = origin.name,
         )
     }
 

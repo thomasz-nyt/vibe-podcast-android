@@ -30,6 +30,9 @@ class AppSettings private constructor(context: Context) {
     private val _autoDownloadOnCellular = MutableStateFlow(loadAutoDlCellular())
     val autoDownloadOnCellular: StateFlow<Boolean> = _autoDownloadOnCellular.asStateFlow()
 
+    private val _autoDownloadRetentionLimit = MutableStateFlow(loadAutoDownloadRetentionLimit())
+    val autoDownloadRetentionLimit: StateFlow<Int> = _autoDownloadRetentionLimit.asStateFlow()
+
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit { putString(KEY_THEME, mode.name) }
         _themeMode.value = mode
@@ -46,6 +49,12 @@ class AppSettings private constructor(context: Context) {
         _autoDownloadOnCellular.value = enabled
     }
 
+    fun setAutoDownloadRetentionLimit(limit: Int) {
+        val accepted = limit.takeIf { it in AUTO_DOWNLOAD_RETENTION_LIMITS } ?: DEFAULT_RETENTION_LIMIT
+        prefs.edit { putInt(KEY_AUTODL_RETENTION, accepted) }
+        _autoDownloadRetentionLimit.value = accepted
+    }
+
     private fun loadTheme(): ThemeMode {
         val raw = prefs.getString(KEY_THEME, null) ?: return ThemeMode.SYSTEM
         return runCatching { ThemeMode.valueOf(raw) }.getOrDefault(ThemeMode.SYSTEM)
@@ -55,15 +64,24 @@ class AppSettings private constructor(context: Context) {
 
     private fun loadAutoDlCellular(): Boolean = prefs.getBoolean(KEY_AUTODL_CELL, false)
 
+    private fun loadAutoDownloadRetentionLimit(): Int {
+        val value = prefs.getInt(KEY_AUTODL_RETENTION, DEFAULT_RETENTION_LIMIT)
+        return value.takeIf { it in AUTO_DOWNLOAD_RETENTION_LIMITS } ?: DEFAULT_RETENTION_LIMIT
+    }
+
     companion object {
         const val MIN_SPEED = 0.5f
         const val MAX_SPEED = 3.0f
         val PLAYBACK_SPEEDS = floatArrayOf(0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+        const val UNLIMITED_RETENTION = -1
+        const val DEFAULT_RETENTION_LIMIT = 3
+        val AUTO_DOWNLOAD_RETENTION_LIMITS = intArrayOf(1, 3, 5, 10, UNLIMITED_RETENTION)
 
         private const val PREFS_NAME = "app_settings"
         private const val KEY_THEME = "theme_mode"
         private const val KEY_SPEED = "default_playback_speed"
         private const val KEY_AUTODL_CELL = "autodownload_cellular"
+        private const val KEY_AUTODL_RETENTION = "autodownload_retention_limit"
 
         @Volatile
         private var instance: AppSettings? = null

@@ -11,10 +11,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaybackProgressEntity::class,
         UrlDownloadEntity::class,
     ],
-    version = 3,
-    // We don't use Room migrations testing yet, and `room.schemaLocation` isn't
-    // wired up; turn off schema export to silence the kapt warning.
-    exportSchema = false,
+    version = 4,
+    exportSchema = true,
 )
 abstract class PodcastDatabase : RoomDatabase() {
     abstract fun downloadedEpisodeDao(): DownloadedEpisodeDao
@@ -69,6 +67,20 @@ abstract class PodcastDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        /** Existing downloads are deliberately grandfathered as pinned/manual. */
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE downloaded_episodes ADD COLUMN origin TEXT NOT NULL DEFAULT 'MANUAL'"
+                )
+                db.execSQL(
+                    "ALTER TABLE url_downloads ADD COLUMN origin TEXT NOT NULL DEFAULT 'MANUAL'"
+                )
+                db.execSQL("ALTER TABLE url_downloads ADD COLUMN podcastId TEXT")
+                db.execSQL("ALTER TABLE url_downloads ADD COLUMN episodePubDateMs INTEGER")
             }
         }
     }

@@ -47,10 +47,12 @@ fun SettingsScreen(
     themeMode: ThemeMode,
     defaultPlaybackSpeed: Float,
     autoDownloadOnCellular: Boolean,
+    autoDownloadRetentionLimit: Int,
     appVersion: String,
     onThemeChange: (ThemeMode) -> Unit,
     onPlaybackSpeedChange: (Float) -> Unit,
     onAutoDownloadCellularChange: (Boolean) -> Unit,
+    onAutoDownloadRetentionChange: (Int) -> Unit,
     onBack: () -> Unit,
 ) {
     Column(
@@ -81,6 +83,11 @@ fun SettingsScreen(
                 checked = autoDownloadOnCellular,
                 onCheckedChange = onAutoDownloadCellularChange,
             )
+            DividerHairline()
+            AutoDownloadRetentionPicker(
+                current = autoDownloadRetentionLimit,
+                onSelect = onAutoDownloadRetentionChange,
+            )
         }
 
         SettingsGroup(label = "About") {
@@ -92,6 +99,34 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(120.dp))
+    }
+}
+
+@Composable
+private fun AutoDownloadRetentionPicker(current: Int, onSelect: (Int) -> Unit) {
+    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+        Text(
+            text = "Auto-downloads kept per podcast",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+        )
+        Text(
+            text = "Manual and restored downloads are always pinned.",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 14.dp).padding(bottom = 4.dp),
+        )
+        AppSettings.AUTO_DOWNLOAD_RETENTION_LIMITS.forEach { limit ->
+            val label = if (limit == AppSettings.UNLIMITED_RETENTION) "Unlimited" else limit.toString()
+            SelectableRow(
+                icon = Icons.Outlined.CloudDownload,
+                title = label,
+                selected = current == limit,
+                onClick = { onSelect(limit) },
+            )
+        }
     }
 }
 

@@ -15,5 +15,6 @@ data class DownloadedEpisodeEntity(
     val duration: Long?,
     val localPath: String,
     val fileSize: Long,
-    val downloadDate: Long
+    val downloadDate: Long,
+    val origin: String = DownloadOrigin.MANUAL.name,
 )

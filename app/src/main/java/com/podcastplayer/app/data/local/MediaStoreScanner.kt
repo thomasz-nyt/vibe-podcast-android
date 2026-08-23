@@ -2,13 +2,17 @@ package com.podcastplayer.app.data.local
 
 import android.Manifest
 import android.app.PendingIntent
+import android.app.RecoverableSecurityException
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
+import androidx.annotation.RequiresApi
+import java.security.MessageDigest
 
 /**
  * Reads back the media this app (or a previous install of it) wrote into the
@@ -48,9 +52,9 @@ class MediaStoreScanner(private val context: Context) {
      * copy — so a reused link points at the original, not a "(2)" duplicate.
      */
     fun findExisting(isVideo: Boolean, expectedDisplayName: String): FoundMedia? {
-        val key = MediaNaming.matchKey(expectedDisplayName)
+        val expectedIdentity = MediaIdentity.parse(expectedDisplayName) ?: return null
         return scanCollection(isVideo)
-            .filter { it.sizeBytes > 0L && MediaNaming.matchKey(it.displayName) == key }
+            .filter { it.sizeBytes > 0L && MediaIdentity.parse(it.displayName) == expectedIdentity }
             .minWithOrNull(
                 compareBy(
                     { it.displayName != expectedDisplayName },
@@ -68,6 +72,90 @@ class MediaStoreScanner(private val context: Context) {
     fun createDeleteRequest(uris: List<Uri>): PendingIntent? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || uris.isEmpty()) return null
         return MediaStore.createDeleteRequest(context.contentResolver, uris)
+    }
+
+    fun createWriteRequest(uris: List<Uri>): PendingIntent? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || uris.isEmpty()) return null
+        return MediaStore.createWriteRequest(context.contentResolver, uris)
+    }
+
+    sealed interface MutationResult {
+        data object Success : MutationResult
+        data class NeedsConsent(val pendingIntent: PendingIntent) : MutationResult
+        data object Failed : MutationResult
+    }
+
+    /** Delete one row, surfacing Android 10's per-item recoverable consent request. */
+    fun delete(uriString: String): MutationResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return try {
+                if (context.contentResolver.delete(Uri.parse(uriString), null, null) > 0) {
+                    MutationResult.Success
+                } else {
+                    MutationResult.Failed
+                }
+            } catch (_: Throwable) {
+                MutationResult.Failed
+            }
+        }
+        return deleteScoped(uriString)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun deleteScoped(uriString: String): MutationResult {
+        return try {
+            if (context.contentResolver.delete(Uri.parse(uriString), null, null) > 0) {
+                MutationResult.Success
+            } else {
+                MutationResult.Failed
+            }
+        } catch (error: RecoverableSecurityException) {
+            MutationResult.NeedsConsent(error.userAction.actionIntent)
+        } catch (_: Throwable) {
+            MutationResult.Failed
+        }
+    }
+
+    /** Rename a MediaStore row without changing its content or relative folder. */
+    fun rename(uriString: String, displayName: String): MutationResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return MutationResult.Failed
+        return renameScoped(uriString, displayName)
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun renameScoped(uriString: String, displayName: String): MutationResult {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, MediaNaming.sanitize(displayName))
+        }
+        return try {
+            if (context.contentResolver.update(Uri.parse(uriString), values, null, null) > 0) {
+                MutationResult.Success
+            } else {
+                MutationResult.Failed
+            }
+        } catch (error: RecoverableSecurityException) {
+            MutationResult.NeedsConsent(error.userAction.actionIntent)
+        } catch (_: Throwable) {
+            MutationResult.Failed
+        }
+    }
+
+    /** SHA-256 of a scanned item; callers limit this to same-size candidate sets. */
+    fun sha256(uriString: String): String? {
+        return try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            context.contentResolver.openInputStream(Uri.parse(uriString))?.use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            } ?: return null
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /**

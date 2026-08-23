@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.MediaNaming
+import com.podcastplayer.app.data.local.MediaIdentity
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
@@ -172,6 +173,7 @@ class UrlDownloadService : Service() {
                 uploader = entity.uploader,
                 title = entity.title,
                 extension = if (requestedType == MediaType.VIDEO) "mp4" else "mp3",
+                identity = MediaIdentity.url(entity.id),
             )
             val reusable = MediaStoreScanner(applicationContext)
                 .findExisting(isVideo = requestedType == MediaType.VIDEO, expectedDisplayName = expectedName)
@@ -222,7 +224,7 @@ class UrlDownloadService : Service() {
             // Try to publish to MediaStore (Android 10+) so VLC, Files, and the
             // Gallery can discover the file. Falls back to app-private storage on
             // older devices.
-            val displayName = buildDisplayName(entity.title, entity.uploader, produced.extension)
+            val displayName = buildDisplayName(entity.id, entity.title, entity.uploader, produced.extension)
             val saved = publishToMediaStore(produced, requestedType, displayName)
 
             if (saved != null) {
@@ -308,8 +310,8 @@ class UrlDownloadService : Service() {
      * "Lex Fridman - Joe Rogan #1.mp4" rather than just the bare video title.
      * Building/sanitizing live in [MediaNaming] so reuse matching stays in sync.
      */
-    private fun buildDisplayName(title: String, uploader: String?, extension: String): String =
-        MediaNaming.urlDisplayName(uploader, title, extension)
+    private fun buildDisplayName(id: String, title: String, uploader: String?, extension: String): String =
+        MediaNaming.urlDisplayName(uploader, title, extension, MediaIdentity.url(id))
 
     private fun pickProducedFile(dir: File): File? {
         val files = dir.listFiles()?.toList().orEmpty()

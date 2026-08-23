@@ -12,6 +12,15 @@ interface DownloadedEpisodeDao {
     @Query("SELECT * FROM downloaded_episodes ORDER BY downloadDate DESC")
     fun getAllEpisodes(): Flow<List<DownloadedEpisodeEntity>>
 
+    @Query("SELECT * FROM downloaded_episodes")
+    suspend fun getAllEpisodesOnce(): List<DownloadedEpisodeEntity>
+
+    @Query("SELECT * FROM downloaded_episodes WHERE podcastId = :podcastId AND origin = 'AUTO'")
+    suspend fun getAutoEpisodesByPodcast(podcastId: String): List<DownloadedEpisodeEntity>
+
+    @Query("SELECT DISTINCT podcastId FROM downloaded_episodes WHERE origin = 'AUTO'")
+    suspend fun getAutoPodcastIds(): List<String>
+
     @Query("SELECT * FROM downloaded_episodes WHERE id = :episodeId")
     suspend fun getEpisodeById(episodeId: String): DownloadedEpisodeEntity?
 

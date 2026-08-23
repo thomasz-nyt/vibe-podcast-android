@@ -32,6 +32,7 @@ import com.podcastplayer.app.BuildConfig
 import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.QueueStorage
+import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
@@ -481,45 +482,176 @@ fun PodcastNavHost(
                     val failedUrlDownloads by urlDownloadViewModel.needsAttentionDownloads.collectAsState()
                     val restoreState by podcastViewModel.restoreState.collectAsState()
                     var maintenanceMessage by remember { mutableStateOf<String?>(null) }
-                    var pendingDeleteCount by remember { mutableStateOf(0) }
+                    var duplicatePlan by remember {
+                        mutableStateOf<com.podcastplayer.app.data.local.DuplicateCleanupPlan?>(null)
+                    }
+                    var showLegacyReview by remember { mutableStateOf(false) }
+                    var pendingDeleteContinuation by remember {
+                        mutableStateOf<((Boolean) -> Unit)?>(null)
+                    }
+                    var pendingWriteContinuation by remember {
+                        mutableStateOf<((Boolean) -> Unit)?>(null)
+                    }
 
                     // Receives the outcome of the system batch-delete consent dialog
                     // (used by single delete, remove-all, and duplicate cleanup).
                     val deleteLauncher = rememberLauncherForActivityResult(
                         ActivityResultContracts.StartIntentSenderForResult()
                     ) { result ->
-                        maintenanceMessage = if (result.resultCode == android.app.Activity.RESULT_OK) {
-                            "Removed $pendingDeleteCount file" + (if (pendingDeleteCount == 1) "." else "s.")
-                        } else {
-                            "Canceled — those files were kept."
+                        val continuation = pendingDeleteContinuation
+                        pendingDeleteContinuation = null
+                        continuation?.invoke(result.resultCode == android.app.Activity.RESULT_OK)
+                    }
+                    val writeLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.StartIntentSenderForResult()
+                    ) { result ->
+                        val continuation = pendingWriteContinuation
+                        pendingWriteContinuation = null
+                        continuation?.invoke(result.resultCode == android.app.Activity.RESULT_OK)
+                    }
+
+                    fun reportActualDeletion(targetUris: List<String>) {
+                        scope.launch {
+                            val remaining = mediaScanner.scanAll().mapTo(hashSetOf()) { it.uriString }
+                            val actual = targetUris.count { it !in remaining }
+                            maintenanceMessage = "Removed $actual file" + if (actual == 1) "." else "s."
                         }
                     }
 
-                    // Route content URIs that couldn't be deleted directly (owned by a
-                    // previous install) through the system consent dialog. Returns whether
-                    // a dialog was shown.
-                    fun requestConsentDelete(uris: List<String>): Boolean {
-                        if (uris.isEmpty()) return false
-                        val request = mediaScanner.createDeleteRequest(uris.map(Uri::parse))
-                        if (request == null) {
-                            maintenanceMessage = "Deleting files from a previous install needs Android 11 or newer."
-                            return false
+                    fun requestConsentDelete(uris: List<String>) {
+                        val targets = uris.distinct()
+                        if (targets.isEmpty()) return
+
+                        fun deleteSequential(remaining: List<String>) {
+                            val uri = remaining.firstOrNull() ?: run {
+                                reportActualDeletion(targets)
+                                return
+                            }
+                            when (val result = mediaScanner.delete(uri)) {
+                                MediaStoreScanner.MutationResult.Success -> deleteSequential(remaining.drop(1))
+                                MediaStoreScanner.MutationResult.Failed -> deleteSequential(remaining.drop(1))
+                                is MediaStoreScanner.MutationResult.NeedsConsent -> {
+                                    pendingDeleteContinuation = { granted ->
+                                        if (granted) deleteSequential(remaining)
+                                        else {
+                                            maintenanceMessage = "Canceled — remaining files were kept."
+                                            reportActualDeletion(targets)
+                                        }
+                                    }
+                                    deleteLauncher.launch(
+                                        androidx.activity.result.IntentSenderRequest.Builder(
+                                            result.pendingIntent.intentSender
+                                        ).build()
+                                    )
+                                }
+                            }
                         }
-                        pendingDeleteCount = uris.size
+
+                        if (android.os.Build.VERSION.SDK_INT == android.os.Build.VERSION_CODES.Q) {
+                            deleteSequential(targets)
+                            return
+                        }
+
+                        val needsConsent = targets.filter { uri ->
+                            mediaScanner.delete(uri) !is MediaStoreScanner.MutationResult.Success
+                        }
+                        if (needsConsent.isEmpty()) {
+                            reportActualDeletion(targets)
+                            return
+                        }
+                        val request = mediaScanner.createDeleteRequest(needsConsent.map(Uri::parse))
+                        if (request == null) {
+                            maintenanceMessage = "Some files could not be deleted."
+                            reportActualDeletion(targets)
+                            return
+                        }
+                        pendingDeleteContinuation = { granted ->
+                            if (!granted) maintenanceMessage = "Canceled — remaining files were kept."
+                            reportActualDeletion(targets)
+                        }
                         deleteLauncher.launch(
                             androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build()
                         )
-                        return true
                     }
 
                     fun startCleanup() {
                         scope.launch {
-                            val uris = podcastViewModel.planDuplicateCleanup()
-                            if (uris.isEmpty()) {
+                            val plan = podcastViewModel.planDuplicateCleanup()
+                            if (plan.confirmed.isEmpty() && plan.ambiguous.isEmpty()) {
                                 maintenanceMessage = "No duplicate files found."
-                                return@launch
+                            } else {
+                                duplicatePlan = plan
                             }
-                            requestConsentDelete(uris)
+                        }
+                    }
+
+                    fun applyLegacyBatch(
+                        matches: List<com.podcastplayer.app.presentation.viewmodel.LegacyRestoreMatch>,
+                    ) {
+                        scope.launch {
+                            var confirmed = 0
+                            matches.forEach { match ->
+                                if (podcastViewModel.applyLegacyRestoreMatch(match) ==
+                                    MediaStoreScanner.MutationResult.Success
+                                ) confirmed++
+                            }
+                            podcastViewModel.finishLegacyRestoreReview(confirmed)
+                            showLegacyReview = false
+                            maintenanceMessage = "Linked $confirmed confirmed legacy file" +
+                                if (confirmed == 1) "." else "s."
+                        }
+                    }
+
+                    fun applyLegacySequential(
+                        matches: List<com.podcastplayer.app.presentation.viewmodel.LegacyRestoreMatch>,
+                        confirmedSoFar: Int = 0,
+                    ) {
+                        val match = matches.firstOrNull() ?: run {
+                            podcastViewModel.finishLegacyRestoreReview(confirmedSoFar)
+                            showLegacyReview = false
+                            maintenanceMessage = "Linked $confirmedSoFar confirmed legacy file" +
+                                if (confirmedSoFar == 1) "." else "s."
+                            return
+                        }
+                        scope.launch {
+                            when (val result = podcastViewModel.applyLegacyRestoreMatch(match)) {
+                                MediaStoreScanner.MutationResult.Success ->
+                                    applyLegacySequential(matches.drop(1), confirmedSoFar + 1)
+                                MediaStoreScanner.MutationResult.Failed ->
+                                    applyLegacySequential(matches.drop(1), confirmedSoFar)
+                                is MediaStoreScanner.MutationResult.NeedsConsent -> {
+                                    pendingWriteContinuation = { granted ->
+                                        if (granted) applyLegacySequential(matches, confirmedSoFar)
+                                        else applyLegacySequential(matches.drop(1), confirmedSoFar)
+                                    }
+                                    writeLauncher.launch(
+                                        androidx.activity.result.IntentSenderRequest.Builder(
+                                            result.pendingIntent.intentSender
+                                        ).build()
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    fun startLegacyRestore(
+                        matches: List<com.podcastplayer.app.presentation.viewmodel.LegacyRestoreMatch>,
+                    ) {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                            val request = mediaScanner.createWriteRequest(matches.map { Uri.parse(it.file.uriString) })
+                            if (request == null) {
+                                applyLegacyBatch(matches)
+                            } else {
+                                pendingWriteContinuation = { granted ->
+                                    if (granted) applyLegacyBatch(matches)
+                                    else maintenanceMessage = "Canceled — files stayed unidentified."
+                                }
+                                writeLauncher.launch(
+                                    androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build()
+                                )
+                            }
+                        } else {
+                            applyLegacySequential(matches)
                         }
                     }
 
@@ -562,8 +694,10 @@ fun PodcastNavHost(
                         runWithOptionalMediaAccess {
                             scope.launch {
                                 val consent = podcastViewModel.deleteAllDownloads()
-                                if (!requestConsentDelete(consent)) {
+                                if (consent.isEmpty()) {
                                     maintenanceMessage = "All downloads removed."
+                                } else {
+                                    requestConsentDelete(consent)
                                 }
                             }
                         }
@@ -673,22 +807,51 @@ fun PodcastNavHost(
                             // owned by this install and restore without any permission.
                             runWithOptionalMediaAccess { podcastViewModel.restorePreviousDownloads() }
                         },
+                        onReviewLegacyMatches = { showLegacyReview = true },
                         onCleanupDuplicates = { withMediaPermission { startCleanup() } },
                         onDismissRestoreResult = { podcastViewModel.dismissRestoreResult() },
                         onDismissMaintenanceMessage = { maintenanceMessage = null },
                         onBack = { navController.popBackStack(route = Routes.Home, inclusive = false) }
                     )
+
+                    val legacyState = restoreState as? com.podcastplayer.app.presentation.viewmodel.RestoreDownloadsState.ReviewLegacy
+                    if (showLegacyReview && legacyState != null) {
+                        LegacyRestoreReviewDialog(
+                            matches = legacyState.suggestions,
+                            onConfirm = ::startLegacyRestore,
+                            onDismiss = {
+                                showLegacyReview = false
+                                podcastViewModel.finishLegacyRestoreReview(0)
+                            },
+                        )
+                    }
+
+                    duplicatePlan?.let { plan ->
+                        DuplicateCleanupDialog(
+                            plan = plan,
+                            onConfirm = { uris ->
+                                duplicatePlan = null
+                                requestConsentDelete(uris)
+                            },
+                            onDismiss = { duplicatePlan = null },
+                        )
+                    }
                 }
 
                 composable(Routes.Settings) {
+                    val scope = rememberCoroutineScope()
                     val themeMode by appSettings.themeMode.collectAsState()
                     val defaultSpeed by appSettings.defaultPlaybackSpeed.collectAsState()
                     val autoDownloadOnCellular by appSettings.autoDownloadOnCellular.collectAsState()
+                    val retentionLimit by appSettings.autoDownloadRetentionLimit.collectAsState()
+                    var pendingRetentionLimit by remember { mutableStateOf<Int?>(null) }
+                    var pendingRetentionTrimCount by remember { mutableStateOf(0) }
 
                     SettingsScreen(
                         themeMode = themeMode,
                         defaultPlaybackSpeed = defaultSpeed,
                         autoDownloadOnCellular = autoDownloadOnCellular,
+                        autoDownloadRetentionLimit = retentionLimit,
                         appVersion = BuildConfig.VERSION_NAME,
                         onThemeChange = appSettings::setThemeMode,
                         onPlaybackSpeedChange = appSettings::setDefaultPlaybackSpeed,
@@ -699,8 +862,54 @@ fun PodcastNavHost(
                                 context, allowCellular = enabled,
                             )
                         },
+                        onAutoDownloadRetentionChange = { requested ->
+                            val lowering = retentionLimit == AppSettings.UNLIMITED_RETENTION ||
+                                (requested != AppSettings.UNLIMITED_RETENTION && requested < retentionLimit)
+                            if (!lowering) {
+                                appSettings.setAutoDownloadRetentionLimit(requested)
+                            } else {
+                                scope.launch {
+                                    pendingRetentionTrimCount =
+                                        com.podcastplayer.app.service.AutoDownloadRetentionManager(context)
+                                            .previewTrimCount(requested)
+                                    pendingRetentionLimit = requested
+                                }
+                            }
+                        },
                         onBack = { navController.popBackStack() },
                     )
+
+                    val proposedLimit = pendingRetentionLimit
+                    if (proposedLimit != null) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { pendingRetentionLimit = null },
+                            title = { androidx.compose.material3.Text("Lower auto-download limit?") },
+                            text = {
+                                androidx.compose.material3.Text(
+                                    "$pendingRetentionTrimCount older automatic file" +
+                                        (if (pendingRetentionTrimCount == 1) " is" else "s are") +
+                                        " eligible for removal. Manual and restored downloads stay pinned."
+                                )
+                            },
+                            confirmButton = {
+                                androidx.compose.material3.TextButton(
+                                    onClick = {
+                                        appSettings.setAutoDownloadRetentionLimit(proposedLimit)
+                                        pendingRetentionLimit = null
+                                        scope.launch {
+                                            com.podcastplayer.app.service.AutoDownloadRetentionManager(context)
+                                                .trimAll(proposedLimit)
+                                        }
+                                    },
+                                ) { androidx.compose.material3.Text("Apply and trim") }
+                            },
+                            dismissButton = {
+                                androidx.compose.material3.TextButton(
+                                    onClick = { pendingRetentionLimit = null },
+                                ) { androidx.compose.material3.Text("Cancel") }
+                            },
+                        )
+                    }
                 }
 
                 composable(Routes.Player) {
