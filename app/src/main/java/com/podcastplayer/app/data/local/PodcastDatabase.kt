@@ -10,14 +10,16 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DownloadedEpisodeEntity::class,
         PlaybackProgressEntity::class,
         UrlDownloadEntity::class,
+        ManualDownloadEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class PodcastDatabase : RoomDatabase() {
     abstract fun downloadedEpisodeDao(): DownloadedEpisodeDao
     abstract fun playbackProgressDao(): PlaybackProgressDao
     abstract fun urlDownloadDao(): UrlDownloadDao
+    abstract fun manualDownloadDao(): ManualDownloadDao
 
     companion object {
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -81,6 +83,35 @@ abstract class PodcastDatabase : RoomDatabase() {
                 )
                 db.execSQL("ALTER TABLE url_downloads ADD COLUMN podcastId TEXT")
                 db.execSQL("ALTER TABLE url_downloads ADD COLUMN episodePubDateMs INTEGER")
+            }
+        }
+
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS manual_downloads (
+                        requestId TEXT NOT NULL,
+                        episodeId TEXT NOT NULL,
+                        podcastId TEXT NOT NULL,
+                        podcastTitle TEXT,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        pubDate INTEGER,
+                        audioUrl TEXT NOT NULL,
+                        duration INTEGER,
+                        status TEXT NOT NULL,
+                        progressPercent REAL NOT NULL,
+                        errorMessage TEXT,
+                        createdAtMs INTEGER NOT NULL,
+                        PRIMARY KEY(requestId)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_manual_downloads_episodeId " +
+                        "ON manual_downloads (episodeId)"
+                )
             }
         }
     }

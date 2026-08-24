@@ -12,13 +12,18 @@ import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.domain.model.Episode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InterruptedIOException
 import java.net.HttpURLConnection
 import java.security.MessageDigest
 import java.util.Date
@@ -76,7 +81,11 @@ class DownloadManager(private val context: Context) {
                     return@withContext Result.success(reusable.uriString)
                 }
 
-                val saved = downloadIntoMediaStore(episode, displayName, onProgress)
+                val saved = runInterruptible {
+                    downloadIntoMediaStore(episode, displayName, onProgress)
+                }
+                currentCoroutineContext().ensureActive()
+                saved
                     ?: return@withContext Result.failure(
                         java.io.IOException("Could not save audio to MediaStore"),
                     )
@@ -102,7 +111,10 @@ class DownloadManager(private val context: Context) {
                     )
                     return@withContext Result.success(localFile.absolutePath)
                 }
-                downloadIntoFile(episode, localFile, onProgress)
+                runInterruptible {
+                    downloadIntoFile(episode, localFile, onProgress)
+                }
+                currentCoroutineContext().ensureActive()
                 val entity = episode.toEntity(
                     localPath = localFile.absolutePath,
                     fileSize = localFile.length(),
@@ -111,7 +123,10 @@ class DownloadManager(private val context: Context) {
                 dao.insertEpisode(entity)
                 Result.success(localFile.absolutePath)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
             Result.failure(e)
         }
     }
@@ -178,6 +193,9 @@ class DownloadManager(private val context: Context) {
         var downloaded = 0L
         var lastReportedPercent = -1
         while (input.read(buffer).also { bytesRead = it } >= 0) {
+            if (Thread.currentThread().isInterrupted) {
+                throw InterruptedIOException("Episode download interrupted")
+            }
             output.write(buffer, 0, bytesRead)
             downloaded += bytesRead
             if (totalBytes > 0) {

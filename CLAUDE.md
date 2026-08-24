@@ -151,16 +151,29 @@ Exposed `StateFlow` values:
 
 **`data/repository/PodcastRepository.kt`** — Combines iTunes search + RSS parsing; both methods return `Result<T>`.
 
-**`data/repository/DownloadManager.kt`** — Downloads audio files to `getExternalFilesDir(DIRECTORY_PODCASTS)/episodes/`. Uses MD5 of episode ID/URL for filenames. Returns `Result<Unit>`.
+**`data/repository/DownloadManager.kt`** — Downloads RSS audio into the shared
+MediaStore `Podcasts/VibePodcast` folder on Android 10+ (app-private external
+storage on older versions). Uses stable media identities for reuse/restore and
+returns `Result<String>` containing the local path or content URI.
+
+**`data/repository/ManualDownloadRepository.kt`** — Persists explicit RSS
+download requests, enqueues unique WorkManager jobs, and reconciles the narrow
+Room/WorkManager enqueue gap after process restart.
 
 **`data/local/SavedPodcastsStorage.kt`** — SharedPreferences `saved_podcasts` pref, JSON-serialized via Gson. Exposes `StateFlow<List<Podcast>>` with `Mutex` for safe concurrent writes.
 
 **`data/local/QueueStorage.kt`** — SharedPreferences `podcast_queues` pref. Manages named queues of podcast IDs. Creates a default `"Morning"` queue on first run.
 
-**`data/local/PodcastDatabase.kt`** — Room database (v3). Tables:
+**`data/local/PodcastDatabase.kt`** — Room database (v5). Schema JSON is exported
+under `app/schemas/`. Tables:
 - `downloaded_episodes` — RSS-podcast download metadata
 - `playback_progress` — per-episode listen position and completion status
 - `url_downloads` — URL-downloaded media (issue #33), separate from RSS downloads
+- `manual_downloads` — durable inputs and progress for explicit RSS download work
+
+**`service/ManualDownloadWorker.kt`** — Foreground WorkManager worker for manual
+RSS downloads. It restores progress from Room, caps concurrent transfers at two,
+and retries transient failures with exponential backoff.
 
 ### Add-from-URL feature (issue #33)
 **`PodcastApplication.kt`** — Application class that initializes `YoutubeDL` + `FFmpeg`
@@ -263,7 +276,7 @@ sealed class EpisodesUiState {
 
 | Storage | Key / File | Contents |
 |---|---|---|
-| Room DB v3 | `podcast_database` | `downloaded_episodes`, `playback_progress`, `url_downloads` |
+| Room DB v5 | `podcast_database` | `downloaded_episodes`, `playback_progress`, `url_downloads`, `manual_downloads` |
 | SharedPreferences | `saved_podcasts` → `podcasts` | JSON list of saved `Podcast` objects |
 | SharedPreferences | `podcast_queues` → `queues` | JSON list of `QueuePayload` objects |
 | SharedPreferences | `player_session` | JSON of last playback session |
@@ -317,7 +330,8 @@ kapt("androidx.room:room-compiler:X.Y.Z")
 ## CI/CD
 
 **GitHub Actions** (`.github/workflows/android-debug-apk.yml`):
-- Triggered on `pull_request` to `main` or manually via `workflow_dispatch`
+- Triggered on pull requests to `main`, pushes to configured branches, or manually via `workflow_dispatch`
+- Runs JVM unit tests with `./gradlew --no-daemon testDebugUnitTest`
 - Builds debug APK with `./gradlew --no-daemon assembleDebug`
 - Uploads `app-debug.apk` as a build artifact
 
@@ -340,6 +354,7 @@ JVM unit tests live under `app/src/test/` (e.g. `PodcastViewModelTest`, `PlayerV
 - `INTERNET` — Network access for search + RSS feeds
 - `FOREGROUND_SERVICE` — Background playback
 - `FOREGROUND_SERVICE_MEDIA_PLAYBACK` — Media-specific foreground service type
+- `FOREGROUND_SERVICE_DATA_SYNC` — URL and durable RSS download foreground work
 - `POST_NOTIFICATIONS` — Media playback notification
 
 **`PlayerService`** must remain `exported="true"` with the `androidx.media3.session.MediaSessionService` intent filter so Media3 can resolve the `SessionToken` from other processes.
@@ -349,9 +364,9 @@ JVM unit tests live under `app/src/test/` (e.g. `PodcastViewModelTest`, `PlayerV
 ## Known Issues / Technical Debt
 
 - No Hilt/Dagger — ViewModels use manual factories; consider Hilt for new features.
-- Room schema export disabled (`exportSchema` not configured, triggers kapt warning). Either add `room.schemaLocation` to kapt options or set `exportSchema = false` in `@Database`.
+- Room migrations have an instrumented test, but CI currently compiles rather than executes device tests.
 - `usesCleartextTraffic="true"` in the manifest allows HTTP RSS feeds; note the security trade-off.
-- Unit test coverage is thin; instrumented tests don't exist. See `docs/analysis-2026-07.md` for the full audit and prioritized roadmap.
+- Unit test coverage remains thin. See `docs/analysis-2026-07.md` for the full audit and prioritized roadmap.
 
 ---
 

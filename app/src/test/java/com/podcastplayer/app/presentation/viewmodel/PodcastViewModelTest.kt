@@ -1,5 +1,7 @@
 package com.podcastplayer.app.presentation.viewmodel
 
+import com.podcastplayer.app.data.local.ManualDownloadEntity
+import com.podcastplayer.app.data.local.ManualDownloadStatus
 import com.podcastplayer.app.data.local.PlaybackProgressEntity
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
@@ -7,6 +9,7 @@ import java.util.Date
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 
@@ -124,6 +127,49 @@ class PodcastViewModelTest {
         assertEquals(listOf(feedNewest.id), result.map { it.id })
     }
 
+    @Test
+    fun manualDownloadSnapshotRestoresActiveProgressAndLatestFailure() {
+        val requests = listOf(
+            manualDownload("queued", "episode-queued", ManualDownloadStatus.QUEUED, progress = 0f, createdAt = 1),
+            manualDownload("running", "episode-running", ManualDownloadStatus.RUNNING, progress = 42f, createdAt = 2),
+            manualDownload(
+                "old-failure",
+                "episode-old-failure",
+                ManualDownloadStatus.FAILED,
+                error = "old error",
+                createdAt = 3,
+            ),
+            manualDownload(
+                "new-failure",
+                "episode-new-failure",
+                ManualDownloadStatus.FAILED,
+                error = "new error",
+                createdAt = 4,
+            ),
+        )
+
+        val snapshot = buildManualDownloadUiSnapshot(requests)
+
+        assertEquals(mapOf("episode-queued" to 0f, "episode-running" to 0.42f), snapshot.progressByEpisodeId)
+        assertEquals(listOf("old-failure", "new-failure"), snapshot.failedRequestIds)
+        assertEquals("2 downloads failed. Latest error: new error", snapshot.failureMessage)
+    }
+
+    @Test
+    fun manualDownloadSnapshotClampsProgressAndIgnoresUnknownStates() {
+        val requests = listOf(
+            manualDownload("low", "episode-low", ManualDownloadStatus.RUNNING, progress = -1f, createdAt = 1),
+            manualDownload("high", "episode-high", ManualDownloadStatus.RUNNING, progress = 101f, createdAt = 2),
+            manualDownload("unknown", "episode-unknown", status = null, progress = 50f, createdAt = 3),
+        )
+
+        val snapshot = buildManualDownloadUiSnapshot(requests)
+
+        assertEquals(mapOf("episode-low" to 0f, "episode-high" to 1f), snapshot.progressByEpisodeId)
+        assertEquals(emptyList<String>(), snapshot.failedRequestIds)
+        assertNull(snapshot.failureMessage)
+    }
+
     private fun podcast(id: String, feedUrl: String?) = Podcast(
         id = id,
         title = id,
@@ -149,5 +195,28 @@ class PodcastViewModelTest {
         durationMs = 0L,
         completed = completed,
         lastPlayedAtMs = 0L,
+    )
+
+    private fun manualDownload(
+        requestId: String,
+        episodeId: String,
+        status: ManualDownloadStatus?,
+        progress: Float = 0f,
+        createdAt: Long,
+        error: String? = null,
+    ) = ManualDownloadEntity(
+        requestId = requestId,
+        episodeId = episodeId,
+        podcastId = "podcast",
+        podcastTitle = "Podcast",
+        title = episodeId,
+        description = null,
+        pubDate = null,
+        audioUrl = "https://example.com/$episodeId.mp3",
+        duration = null,
+        status = status?.name ?: "UNKNOWN",
+        progressPercent = progress,
+        errorMessage = error,
+        createdAtMs = createdAt,
     )
 }

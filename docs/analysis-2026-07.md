@@ -111,12 +111,11 @@ Ranked by user-visible impact.
    cold-start win for a Compose+Media3 app). CI never runs the release/R8 build, so the hand-written
    keep rules for Gson-reflected models are untested.
 8. Smaller items: `SimpleDateFormat` allocated per episode per format attempt in the RSS parse loop
-   (`RssParser.kt:186-189`); unbounded parallel manual downloads (one coroutine per tap, no semaphore);
-   `AutoDownloadWorker.enqueuePeriodic` runs a prefs read + WorkManager enqueue on the main thread in
+   (`RssParser.kt:186-189`); `AutoDownloadWorker.enqueuePeriodic` runs a prefs read + WorkManager enqueue on the main thread in
    `Application.onCreate` (`PodcastApplication.kt:46`); yt-dlp self-update hits the network on every cold
    start (`PodcastApplication.kt:62-72`) — should be throttled to ~daily; no `@Index` on
-   `downloaded_episodes.podcastId` / `playback_progress.podcastId`; `exportSchema = false` (no migration
-   drift guard).
+   `downloaded_episodes.podcastId` / `playback_progress.podcastId`. Schema export and a migration test
+   now exist, but that test is instrumentation-only and is not executed in CI.
 
 ---
 
@@ -135,10 +134,9 @@ Ranked by user-visible impact.
   (`UrlDownloadService.kt:169-171`); any failure/cancel left `url_downloads/<id>/` with `.part` files
   forever, and a leftover partial could even be picked up as the "produced file" on retry
   (`UrlDownloadRepository.pickProducedFile:240-249`). → cleanup on all paths + orphan sweep at pump start.
-- **Manual RSS downloads die with the process.** `PodcastViewModel.startDownload` runs the download in a
-  raw `viewModelScope` coroutine (`PodcastViewModel.kt:260-280`) — no foreground service, no WorkManager,
-  no resume; kill the app mid-download and it silently vanishes. (Auto-downloads already use WorkManager;
-  manual ones should enqueue through the same worker or a dedicated one.) **P1.**
+- **[FIXED] Manual RSS downloads died with the UI process.** Requests now persist in Room and run in
+  foreground WorkManager jobs, with startup reconciliation, bounded concurrency, and automatic retries.
+  WorkManager restarts interrupted work after process/device restarts; byte-range resume remains separate.
 - No HTTP `Range` resume anywhere — a download that dies at 99% restarts from zero
   (`DownloadManager.kt:96-98`).
 - OPML export silently drops podcasts without a `feedUrl` (`OpmlManager.kt:23`).
@@ -157,8 +155,8 @@ Ranked by user-visible impact.
 - **New-episode awareness.** The 24 h `AutoDownloadWorker` already fetches feeds but only to download —
   no "N new episodes" notification, no unread badges, no display-facing feed refresh. Cache the worker's
   parse results and surface them.
-- **Manual downloads via WorkManager** (see correction above) + download queue with a concurrency cap,
-  pause/resume via `Range` requests, and auto-delete-played / keep-latest-N storage policies.
+- **Manual RSS download controls:** HTTP `Range` resume plus pause/cancel controls. Durable WorkManager
+  execution, bounded concurrency, and keep-latest-N auto-download retention are now implemented.
 - **URL downloads:** auto-retry with backoff for transient failures; `--continue` for resume; playlist
   support; quality selection; per-item progress on the AddFromUrl screen; snackbar confirmation on enqueue.
 - **Playback:** skip-silence (`setSkipSilenceEnabled` — one-liner with ExoPlayer), volume boost
@@ -248,5 +246,5 @@ download; a release-build (R8) smoke test of the full flow.
 | Priority | Items |
 |---|---|
 | **P0 — this branch** | Feed timeouts + TTL cache · download-progress throttling (RSS + URL) · main-thread IPC fix in playback snapshots · session persistence off main thread · Play-Queue spec-004 correction + parallel fetch · partial URL-download cleanup + orphan sweep · this document + CLAUDE.md corrections |
-| **P1 — next sessions** | Episode Intelligence MVP (AI) · episode-level queue / play-next · manual downloads via WorkManager (+resume, storage policies) · new-episode notifications/badges · URL-download retry/resume/quality · skip-silence + volume boost + service-side sleep timer · empty states + confirm/undo consistency + mini-player on Downloads + scrubbable mini-player · back-navigation fix · CI: tests + lint + release build |
+| **P1 — next sessions** | Episode Intelligence MVP (AI) · episode-level queue / play-next · manual-download HTTP Range resume + pause/cancel · new-episode notifications/badges · URL-download retry/resume/quality · skip-silence + volume boost + service-side sleep timer · empty states + confirm/undo consistency + mini-player on Downloads + scrubbable mini-player · back-navigation fix · CI: tests + lint + release build |
 | **P2 — later** | strings.xml/i18n · edge-to-edge + splash · dependency refresh + baseline profile · Android Auto/Cast · chapters · OPML completeness · Room indices/schema export · APK slimming (ABI splits) · statistics & per-podcast settings |
