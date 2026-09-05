@@ -64,7 +64,7 @@ app/src/main/java/com/podcastplayer/app/
 ./gradlew connectedDebugAndroidTest
 ```
 
-Pull requests run these as independent GitHub Actions jobs. Test and lint reports are uploaded even when a gate fails; successful builds upload debug and unsigned release APKs. Storage changes still require the API 28/29/34 manual checks in `.github/pull_request_template.md`.
+Pull requests run these as independent GitHub Actions jobs. Unit, lint, and connected-test reports are uploaded after success or failure unless the run is cancelled; successful builds upload debug and unsigned release APKs. Storage changes must document the applicable API 28/29/34 manual checks prompted by `.github/pull_request_template.md`.
 
 ### JDK
 
