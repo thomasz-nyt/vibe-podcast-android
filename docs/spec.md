@@ -1,5 +1,8 @@
 # Podcast Player – Session Notes (2026-01-11)
 
+> These dated sections preserve historical decisions and may describe work that has since shipped.
+> The approved current reliability contract is [spec 007](specs/007-first-reliability-milestone.md).
+
 ## Recent Fixes
 - Playback now prefers downloaded `localPath` for offline episodes.
 - PlayerScreen receives podcast artwork and displays it instead of audio URL.
@@ -13,13 +16,13 @@
 - Downloaded playback uses file URIs and preserves original stream URLs.
 
 ## Known Warnings/Follow-ups
-- Room: schema export path not set (kapt warning); choose `exportSchema=false` or set `room.schemaLocation`.
+- **Resolved:** Room schemas are exported under `app/schemas/`; migrations have an instrumented test and spec 007 adds an API 34 connected-test CI gate.
 - AppOps attributionTag warnings from platform; currently harmless.
 - MediaPlayerWrapper metadata timeouts observed; benign while session metadata syncs.
 
 ## Next-Step Ideas (proposed)
-- Proper navigation graph (Navigation Compose) instead of manual string routing.
-- Media notification with controls and metadata (artwork/title) using Media3 PlayerNotificationManager. **(In progress/partially added)**
+- **Resolved:** Navigation Compose graph is implemented; spec 007 now governs shared-shell and Back/state improvements.
+- **Resolved:** Media3 session notification supplies playback controls and metadata; richer metadata remains future polish.
 - Download UX: progress, storage usage, retry/cancel, cleanup.
 - Playback resilience: handle network errors, show player errors, and auto-reconnect.
 - Testing: unit tests for ViewModels (search, downloads), RSS parsing, repository flows.
@@ -81,14 +84,12 @@ the user paste, share, or type a YouTube or X (Twitter) URL and save the audio
 - Single converged screen (`AddFromUrlScreen`) for all three entry flows;
   avoids a bottom-sheet / full-screen split.
 - Audio-default in the format picker (smaller files, podcast-like UX).
-- App-private storage at `filesDir/url_downloads/` (not external Downloads).
+- URL extraction uses `filesDir/url_downloads/` as a work/fallback area; completed media is normally published to the shared MediaStore `Podcasts/VibePodcast` or `Movies/VibePodcast` collection on Android 10+.
 - Stable IDs hash the canonicalized URL + media type so the same URL can exist
   as audio AND video without colliding.
 - Synthetic `podcastId = "vibe-url-downloads"` keeps URL items out of
   saved-podcast / queue logic.
-- Scope-trim: no Downloads-screen surfacing of URL items, no Wi-Fi-only
-  setting, no PiP, no cookie-auth — all flagged as v2 candidates in §15 of
-  the spec.
+- Scope-trim at launch omitted Wi-Fi-only settings, PiP, and cookie auth. URL media has since been added to Downloads; those remaining items stay optional follow-ups.
 
 ### Open follow-ups
 
@@ -96,4 +97,4 @@ the user paste, share, or type a YouTube or X (Twitter) URL and save the audio
 - Android 15 16KB-page-size verification of the bundled native libs.
 - Reconcile logic for orphaned `DOWNLOADING` rows on service start (process
   death edge case).
-- `Downloads` screen surfacing of URL items (currently only Home).
+- **Resolved:** completed and failed URL items are surfaced in Downloads; spec 007 plans a unified queued/running/failed/completed activity model.
