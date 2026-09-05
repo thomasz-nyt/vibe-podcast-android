@@ -20,94 +20,109 @@ concurrency:
 jobs:
   unit-tests:
     name: JVM unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: Run unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
       - name: Upload unit-test reports
-        if: always()
-        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unit-test-reports-${{ github.sha }}
           path: |
             app/build/reports/tests/testDebugUnitTest/
             app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
+          retention-days: 14
 
   lint:
     name: Android lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: Run lint
         run: ./gradlew --no-daemon lintDebug
       - name: Upload lint reports
-        if: always()
-        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lint-reports-${{ github.sha }}
           path: app/build/reports/lint-results-debug.*
           if-no-files-found: warn
+          retention-days: 14
 
   build:
     name: Debug and release builds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: Build debug and release APKs
         run: ./gradlew --no-daemon assembleDebug assembleRelease
       - name: Upload APK artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: app-apks-${{ github.sha }}
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   connected-tests:
     name: API 34 connected tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up JDK 17
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       - name: Enable KVM access
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -115,46 +130,73 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Run connected tests on API 34
-        uses: ReactiveCircus/android-emulator-runner@v2
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
+          target: default
           arch: x86_64
+          profile: Nexus 6
+          cores: 2
+          ram-size: 2048M
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: ./gradlew --no-daemon connectedDebugAndroidTest
-      - name: Annotate connected-test failures
+      - name: Summarize connected-test failures
         if: failure()
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import os
           import xml.etree.ElementTree as ET
 
-          reports = sorted(Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml"))
-          if not reports:
-              print("::error title=Connected tests failed::No instrumentation XML report was produced")
+          reports = sorted(Path("app/build/outputs/androidTest-results/connected").rglob("*.xml"))
+          failures = []
+          parse_errors = []
           for report in reports:
               try:
                   root = ET.parse(report).getroot()
               except ET.ParseError as error:
-                  print(f"::error file={report},title=Unreadable connected-test report::{error}")
+                  parse_errors.append(f"{report}: {error}")
                   continue
+              report_failure_count = len(failures)
               for case in root.iter("testcase"):
-                  failure = case.find("failure")
-                  if failure is None:
-                      failure = case.find("error")
-                  if failure is None:
-                      continue
-                  name = f"{case.get('classname', '')}.{case.get('name', '')}".strip(".")
-                  message = (failure.get("message") or failure.text or "Connected test failed").strip()
-                  message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-                  print(f"::error file={report},title={name}::{message}")
+                  title = f"{case.get('classname', '')}.{case.get('name', '')}".strip(".")
+                  for tag in ("failure", "error"):
+                      node = case.find(tag)
+                      if node is None:
+                          continue
+                      message = (node.get("message") or node.text or "Connected test failed").strip()
+                      failures.append((title or root.get("name", "connected test"), message))
+              if len(failures) == report_failure_count:
+                  for node in root:
+                      if node.tag not in {"failure", "error"}:
+                          continue
+                      message = (node.get("message") or node.text or "Connected test failed").strip()
+                      failures.append((root.get("name", "connected test"), message))
+
+          if not failures:
+              detail = "; ".join(parse_errors) if parse_errors else (
+                  "No XML failure node was available; download the connected-test report artifact."
+              )
+              failures.append(("Connected tests failed", detail))
+
+          def command_escape(value):
+              return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a") as output:
+              output.write("## Connected-test failures\n\n")
+              for title, message in failures:
+                  output.write(f"### {title}\n\n```text\n{message}\n```\n\n")
+                  print(f"::error title={command_escape(title)}::{command_escape(message)}")
           PY
       - name: Upload connected-test reports
-        if: always()
-        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: connected-test-reports-${{ github.sha }}
           path: |
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
           if-no-files-found: warn
+          retention-days: 14
