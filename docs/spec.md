@@ -9,14 +9,14 @@
 - Manifest: `PlayerService` exported with MediaSessionService intent filter for Media3 SessionToken resolution.
 - Compose BOM aligned (2023.10.01) to match compiler; crash resolved.
 - Gradle wrapper + AndroidX/Jetifier + SDK path added; debug build verified via `./gradlew assembleDebug` (JDK 17).
-- Media notification now uses Media3 PlayerNotificationManager with metadata from episodes.
+- Media notification now uses Media3 `DefaultMediaNotificationProvider` with session controls and episode metadata.
 - Mini player artwork sticks to the active episode.
 - Episode IDs now use RSS `guid`/`enclosure` URL to keep list and playback aligned.
 - Download flow exposes progress and disables the button while downloading.
 - Downloaded playback uses file URIs and preserves original stream URLs.
 
 ## Known Warnings/Follow-ups
-- **Resolved:** Room schemas are exported under `app/schemas/`; migrations have an instrumented test and spec 007 adds an API 34 connected-test CI gate.
+- **Resolved:** Room schemas are exported under `app/schemas/`; migration tests run in milestone PR 1's API 34 connected-test CI job.
 - AppOps attributionTag warnings from platform; currently harmless.
 - MediaPlayerWrapper metadata timeouts observed; benign while session metadata syncs.
 
@@ -95,6 +95,5 @@ the user paste, share, or type a YouTube or X (Twitter) URL and save the audio
 
 - ABI splits for the youtubedl-android native libs to chop ~40MB off the APK.
 - Android 15 16KB-page-size verification of the bundled native libs.
-- Reconcile logic for orphaned `DOWNLOADING` rows on service start (process
-  death edge case).
+- **Resolved:** URL-download pump startup requeues interrupted extracting/downloading rows and sweeps orphan work directories before serial processing resumes.
 - **Resolved:** completed and failed URL items are surfaced in Downloads; spec 007 plans a unified queued/running/failed/completed activity model.
