@@ -120,7 +120,7 @@ Routes (start destination is `"home"`):
 "add-feed?feedUrl={feedUrl}" → AddFeedScreen
 ```
 
-Sub-screens override back to pop to `"home"` (inclusive = false) rather than following the system back stack; bottom-nav tab taps use `popUpTo(home)` + `launchSingleTop`.
+Sub-screens override back to pop to `"home"` (inclusive = false) rather than following the system back stack; bottom-nav tab taps use `popUpTo(home)` + `launchSingleTop`. Spec 007 approves a shared shell, global Settings gear, and origin-preserving Back, but those changes are planned rather than shipped.
 
 ### ViewModels
 **`presentation/viewmodel/PodcastViewModel.kt`** — Manages podcast search, episode list, saved podcasts, queue management, download state, and playback progress.
@@ -181,8 +181,9 @@ on a background coroutine and attempts a yt-dlp binary refresh. `youtubeDlReady`
 is the gate the repository checks before invoking yt-dlp.
 
 **`data/repository/UrlDownloadRepository.kt`** — Owns metadata extraction
-(`yt-dlp --dump-json`), the `url_downloads` Room rows, and the on-disk download
-dir (`filesDir/url_downloads/`). Builds `YoutubeDLRequest` for audio (MP3 via
+(`yt-dlp --dump-json`), the `url_downloads` Room rows, and the app-private
+work/fallback directory (`filesDir/url_downloads/`). Completed media normally
+publishes to MediaStore on API 29+. Builds `YoutubeDLRequest` for audio (MP3 via
 ffmpeg) vs video (mp4 merge). Maps completed entities to `Episode` for the
 existing player pipeline.
 
@@ -237,7 +238,8 @@ data class Episode(val id: String, val podcastId: String, val title: String,
                    val audioUrl: String, val duration: Long?,
                    val imageUrl: String? = null,
                    val isDownloaded: Boolean = false,
-                   val localPath: String? = null)
+                   val localPath: String? = null,
+                   val mediaType: MediaType = MediaType.AUDIO)
 
 // domain/model/PlayerState.kt
 enum class PlaybackState { IDLE, LOADING, PLAYING, PAUSED, ERROR }
@@ -333,10 +335,10 @@ kapt("androidx.room:room-compiler:X.Y.Z")
 - Triggered on pull requests to `main`, pushes to configured branches, or manually via `workflow_dispatch`
 - Runs independent jobs for JVM unit tests, Android lint, and debug + release assembly so one failure does not hide the other gates
 - Runs connected instrumentation tests on an API 34 x86_64 emulator
-- Uploads unit-test, lint, and connected-test reports even when their gate fails
+- Uploads unit-test, lint, and connected-test reports after success or failure unless the run is cancelled
 - Uploads both debug and unsigned release APKs after successful assembly
 
-Do not treat green CI as proof of Android 8/10 storage ownership, consent, process-death, Bluetooth, or layout behavior. Storage and migration changes must also complete the applicable API 28/29/34 checks in `.github/pull_request_template.md`.
+Do not treat green CI as proof of Android 8/10 storage ownership, consent, process-death, Bluetooth, or layout behavior. Storage and migration PRs must document the applicable API 28/29/34 checks prompted by `.github/pull_request_template.md`.
 
 ---
 
@@ -384,4 +386,4 @@ Detailed design specs live in `docs/specs/`:
 - `006-url-downloads.md` — YouTube/X URL downloads and offline playback
 - `007-first-reliability-milestone.md` — Approved navigation, deletion, offline-queue, and verification contract
 
-Session notes and architecture decisions are in `docs/spec.md`. Pull requests use `.github/pull_request_template.md`; never check a manual-verification item that was not actually performed.
+Session notes and architecture decisions are in `docs/spec.md`. Pull requests use `.github/pull_request_template.md`; never check a manual-verification item that was not actually performed. Before changing navigation, deletion, Queue selection/offline behavior, min SDK, or distribution assumptions, follow spec 007. Its milestone behavior is approved but not necessarily shipped; distribution remains personal/internal.
