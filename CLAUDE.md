@@ -331,9 +331,12 @@ kapt("androidx.room:room-compiler:X.Y.Z")
 
 **GitHub Actions** (`.github/workflows/android-debug-apk.yml`):
 - Triggered on pull requests to `main`, pushes to configured branches, or manually via `workflow_dispatch`
-- Runs JVM unit tests with `./gradlew --no-daemon testDebugUnitTest`
-- Builds debug APK with `./gradlew --no-daemon assembleDebug`
-- Uploads `app-debug.apk` as a build artifact
+- Runs independent jobs for JVM unit tests, Android lint, and debug + release assembly so one failure does not hide the other gates
+- Runs connected instrumentation tests on an API 34 x86_64 emulator
+- Uploads unit-test, lint, and connected-test reports even when their gate fails
+- Uploads both debug and unsigned release APKs after successful assembly
+
+Do not treat green CI as proof of Android 8/10 storage ownership, consent, process-death, Bluetooth, or layout behavior. Storage and migration changes must also complete the applicable API 28/29/34 checks in `.github/pull_request_template.md`.
 
 ---
 
@@ -364,7 +367,7 @@ JVM unit tests live under `app/src/test/` (e.g. `PodcastViewModelTest`, `PlayerV
 ## Known Issues / Technical Debt
 
 - No Hilt/Dagger — ViewModels use manual factories; consider Hilt for new features.
-- Room migrations have an instrumented test, but CI currently compiles rather than executes device tests.
+- Room migrations have an API 34 connected-test gate in CI; storage behavior that differs on API 28/29 still requires the manual matrix in the pull-request template.
 - `usesCleartextTraffic="true"` in the manifest allows HTTP RSS feeds; note the security trade-off.
 - Unit test coverage remains thin. See `docs/analysis-2026-07.md` for the full audit and prioritized roadmap.
 
@@ -377,5 +380,8 @@ Detailed design specs live in `docs/specs/`:
 - `002-playback-progress.md` — Playback position persistence design
 - `003-navigation-compose.md` — Navigation Compose migration
 - `004-podcast-queue-play.md` — Podcast queue playback feature
+- `005-landscape-layout.md` — Landscape browsing and player layouts
+- `006-url-downloads.md` — YouTube/X URL downloads and offline playback
+- `007-first-reliability-milestone.md` — Approved navigation, deletion, offline-queue, and verification contract
 
-Session notes and architecture decisions are in `docs/spec.md`.
+Session notes and architecture decisions are in `docs/spec.md`. Pull requests use `.github/pull_request_template.md`; never check a manual-verification item that was not actually performed.
