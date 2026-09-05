@@ -163,8 +163,9 @@ Ranked by user-visible impact.
   (`LoudnessEnhancer`), configurable skip intervals, end-of-episode sleep-timer mode (timer should also
   live in the service, not the ViewModel, to survive process death), chapter support
   (`podcast:chapters` / MP3 chapter frames).
-- **CI:** run `./gradlew test` and `lint` on PRs; add an `assembleRelease` job so R8 keep rules for
-  Gson-reflected models stop being a release-only landmine.
+- **[ADDRESSED BY SPEC 007 / MILESTONE PR 1] CI:** pull requests now run independent JVM-test,
+  lint, debug + release assembly, and API 34 connected-test jobs. Reports are uploaded on failure so
+  one broken gate does not hide the others. API 28/29 storage behavior remains an explicit manual gate.
 
 **P2 — polish / platform**
 - Android Auto (`MediaLibraryService` + content tree + manifest declaration), Chromecast (`media3-cast`),
@@ -246,5 +247,5 @@ download; a release-build (R8) smoke test of the full flow.
 | Priority | Items |
 |---|---|
 | **P0 — this branch** | Feed timeouts + TTL cache · download-progress throttling (RSS + URL) · main-thread IPC fix in playback snapshots · session persistence off main thread · Play-Queue spec-004 correction + parallel fetch · partial URL-download cleanup + orphan sweep · this document + CLAUDE.md corrections |
-| **P1 — next sessions** | Episode Intelligence MVP (AI) · episode-level queue / play-next · manual-download HTTP Range resume + pause/cancel · new-episode notifications/badges · URL-download retry/resume/quality · skip-silence + volume boost + service-side sleep timer · empty states + confirm/undo consistency + mini-player on Downloads + scrubbable mini-player · back-navigation fix · CI: tests + lint + release build |
+| **P1 — next sessions** | First reliability milestone per spec 007: canonical media availability · transactional deletion · request-bound Add flows · four-tab shared shell + global Settings · persistent mini-player · Queue-local show management · show-detail parity · unified download activity · cached offline Queue. Follow later with episode-level Up next, HTTP Range resume, new-episode awareness, URL quality/resume, skip-silence, service-side sleep timer, and other playback improvements. |
 | **P2 — later** | strings.xml/i18n · edge-to-edge + splash · dependency refresh + baseline profile · Android Auto/Cast · chapters · OPML completeness · Room indices/schema export · APK slimming (ABI splits) · statistics & per-podcast settings |
