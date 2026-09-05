@@ -11,6 +11,8 @@ A simple podcast player app built with Kotlin and Jetpack Compose.
   downloads persist in Room and continue through foreground WorkManager jobs
 - **Background Play**: Foreground service with media session for background playback
 - **Player Controls**: Play/pause, seek, playback speed control
+- **Named Show Queues**: Play one newest unplayed episode from each queued show, in show order
+- **Download Library**: Manage completed RSS and URL media from the Downloads screen
 - **Add from URL**: Paste / share / type a YouTube or X (Twitter) URL and save the
   audio (MP3) or video (MP4) for fully offline playback. Powered by yt-dlp via
   [`youtubedl-android`](https://github.com/yausername/youtubedl-android).
@@ -52,11 +54,17 @@ app/src/main/java/com/podcastplayer/app/
 - Android SDK 34
 - Min SDK 26
 
-### Build
+### Verification
 
 ```bash
-./gradlew assembleDebug
+./gradlew testDebugUnitTest
+./gradlew lintDebug
+./gradlew assembleDebug assembleRelease
+# Requires a connected device or emulator:
+./gradlew connectedDebugAndroidTest
 ```
+
+Pull requests run these as independent GitHub Actions jobs. Test and lint reports are uploaded even when a gate fails; successful builds upload debug and unsigned release APKs. Storage changes still require the API 28/29/34 manual checks in `.github/pull_request_template.md`.
 
 ### JDK
 
@@ -127,8 +135,8 @@ Pipeline:
 - The user picks audio (MP3, extracted via ffmpeg) or video (MP4, h264+aac merged).
 - A row is inserted into Room (`url_downloads` table) and `UrlDownloadService`
   drains the queue serially, posting progress updates back through the repo.
-- Completed items appear in a "Saved from URL" section on the home screen and
-  play through the existing Media3 player. Video items render via a `PlayerView`
+- Completed items appear on Home and in Downloads and play through the existing
+  Media3 player. Video items render via a `PlayerView`
   surface in the player screen; audio items reuse the artwork view.
 
 > ⚠️ **Personal/internal use.** YouTube and X Terms of Service generally prohibit
@@ -141,6 +149,11 @@ Pipeline:
 ```
 GET https://itunes.apple.com/search?term={query}&media=podcast&limit=25
 ```
+
+## Development contract
+
+- [First reliability milestone](docs/specs/007-first-reliability-milestone.md)
+- [Pull request verification checklist](.github/pull_request_template.md)
 
 ## Dependencies
 
