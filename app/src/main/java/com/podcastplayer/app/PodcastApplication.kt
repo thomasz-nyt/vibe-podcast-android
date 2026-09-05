@@ -2,6 +2,7 @@ package com.podcastplayer.app
 
 import android.app.Application
 import android.util.Log
+import com.podcastplayer.app.data.repository.ManualDownloadRepository
 import com.podcastplayer.app.service.AutoDownloadWorker
 import com.podcastplayer.app.util.CrashRecorder
 import com.yausername.ffmpeg.FFmpeg
@@ -41,6 +42,14 @@ class PodcastApplication : Application() {
             initYoutubeDl()
             // Fire-and-forget update; safe to skip if it fails.
             tryUpdateYoutubeDl()
+        }
+
+        appScope.launch {
+            try {
+                ManualDownloadRepository(this@PodcastApplication).resumePending()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Could not reconcile pending episode downloads", t)
+            }
         }
 
         AutoDownloadWorker.enqueuePeriodic(this)

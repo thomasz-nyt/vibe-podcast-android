@@ -6,6 +6,8 @@ import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaIdentity
 import com.podcastplayer.app.data.local.MediaFileCandidate
 import com.podcastplayer.app.data.local.MediaStoreScanner
+import com.podcastplayer.app.data.local.ManualDownloadEntity
+import com.podcastplayer.app.data.local.ManualDownloadStatus
 import com.podcastplayer.app.data.local.RestoreEpisodeCandidate
 import com.podcastplayer.app.data.local.RestorePlanner
 import com.podcastplayer.app.data.local.DuplicateCleanupPlan
@@ -18,6 +20,7 @@ import com.podcastplayer.app.data.local.PlaybackProgressEntity
 import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.DownloadManager
+import com.podcastplayer.app.data.repository.ManualDownloadRepository
 import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.domain.model.Episode
@@ -46,6 +49,7 @@ import kotlinx.coroutines.withContext
 class PodcastViewModel(
     private val repository: PodcastRepository,
     private val downloadManager: DownloadManager,
+    private val manualDownloadRepository: ManualDownloadRepository,
     private val savedPodcastsStorage: SavedPodcastsStorage,
     private val queueStorage: QueueStorage,
     private val playbackProgressDao: PlaybackProgressDao,
@@ -186,8 +190,22 @@ class PodcastViewModel(
     }
 
     init {
+        observeManualDownloads()
         observeSaved()
         observeQueues()
+    }
+
+    private fun observeManualDownloads() {
+        viewModelScope.launch {
+            manualDownloadRepository.observeAll().collect { requests ->
+                val snapshot = buildManualDownloadUiSnapshot(requests)
+                _downloadProgress.value = snapshot.progressByEpisodeId
+                snapshot.failureMessage?.let { _downloadError.value = it }
+                snapshot.failedRequestIds.forEach { requestId ->
+                    manualDownloadRepository.remove(requestId)
+                }
+            }
+        }
     }
 
     fun selectPodcast(podcast: Podcast) {
@@ -275,20 +293,19 @@ class PodcastViewModel(
     fun startDownload(episode: Episode) {
         if (_downloadProgress.value.containsKey(episode.id)) return
         _downloadProgress.value = _downloadProgress.value + (episode.id to 0f)
-        // Surface the podcast title to DownloadManager so the MediaStore display
+        // Persist the request before WorkManager starts it. The podcast title is
+        // kept with the request so the MediaStore display
         // name reads as "<podcast> - <episode>.mp3" when browsed from VLC / Files.
         val podcastTitle = _savedPodcasts.value.firstOrNull { it.id == episode.podcastId }?.title
             ?: _selectedPodcast.value?.takeIf { it.id == episode.podcastId }?.title
         viewModelScope.launch {
-            val result = downloadManager.downloadEpisode(episode, podcastTitle) { progress ->
-                _downloadProgress.value = _downloadProgress.value + (episode.id to progress)
-            }
-            _downloadProgress.value = _downloadProgress.value - episode.id
-            if (result.isSuccess) {
-                refreshEpisodesWithDownloads()
-            } else {
-                val reason = result.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
-                    ?: "Unknown error"
+            try {
+                manualDownloadRepository.enqueue(episode, podcastTitle)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _downloadProgress.value = _downloadProgress.value - episode.id
+                val reason = e.message?.takeIf { it.isNotBlank() } ?: "Unknown error"
                 _downloadError.value = "Download failed: $reason"
             }
         }
@@ -689,6 +706,39 @@ class PodcastViewModel(
         progressJob?.cancel()
         super.onCleared()
     }
+}
+
+internal data class ManualDownloadUiSnapshot(
+    val progressByEpisodeId: Map<String, Float>,
+    val failedRequestIds: List<String>,
+    val failureMessage: String?,
+)
+
+/** Converts persisted worker state into the existing episode-list download UI contract. */
+internal fun buildManualDownloadUiSnapshot(
+    requests: List<ManualDownloadEntity>,
+): ManualDownloadUiSnapshot {
+    val active = requests
+        .filter {
+            it.status == ManualDownloadStatus.QUEUED.name ||
+                it.status == ManualDownloadStatus.RUNNING.name
+        }
+        .associate { it.episodeId to (it.progressPercent / 100f).coerceIn(0f, 1f) }
+    val failures = requests.filter { it.status == ManualDownloadStatus.FAILED.name }
+    val latestFailure = failures.maxByOrNull { it.createdAtMs }
+    val failureMessage = latestFailure?.let { failure ->
+        val reason = failure.errorMessage?.takeIf { it.isNotBlank() } ?: "Unknown error"
+        if (failures.size == 1) {
+            "Download failed: $reason"
+        } else {
+            "${failures.size} downloads failed. Latest error: $reason"
+        }
+    }
+    return ManualDownloadUiSnapshot(
+        progressByEpisodeId = active,
+        failedRequestIds = failures.map { it.requestId },
+        failureMessage = failureMessage,
+    )
 }
 
 data class DownloadedEpisodeUi(

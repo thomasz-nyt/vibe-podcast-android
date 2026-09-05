@@ -37,6 +37,7 @@ import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
 import com.podcastplayer.app.data.repository.DownloadManager
+import com.podcastplayer.app.data.repository.ManualDownloadRepository
 import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
@@ -104,6 +105,7 @@ fun PodcastNavHost(
         factory = PodcastViewModelFactory(
             PodcastRepository(iTunesApi.create(), RssParser()),
             DownloadManager(context),
+            ManualDownloadRepository(context),
             SavedPodcastsStorage(context),
             queueStorage,
             db.playbackProgressDao(),

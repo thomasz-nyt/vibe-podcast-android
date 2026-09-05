@@ -15,7 +15,7 @@ class PodcastDatabaseMigrationTest {
     private val databaseName = "migration-test"
 
     @Test
-    fun migration3To4PinsExistingRowsAndLeavesUrlEpisodeMetadataNullable() = runBlocking {
+    fun migration3To5PinsExistingRowsAndCreatesManualDownloadQueue() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.deleteDatabase(databaseName)
         context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).apply {
@@ -83,7 +83,10 @@ class PodcastDatabaseMigrationTest {
         }
 
         val database = Room.databaseBuilder(context, PodcastDatabase::class.java, databaseName)
-            .addMigrations(PodcastDatabase.MIGRATION_3_4)
+            .addMigrations(
+                PodcastDatabase.MIGRATION_3_4,
+                PodcastDatabase.MIGRATION_4_5,
+            )
             .build()
 
         val rss = database.downloadedEpisodeDao().getEpisodeById("episode")!!
@@ -92,6 +95,7 @@ class PodcastDatabaseMigrationTest {
         assertEquals(DownloadOrigin.MANUAL.name, url.origin)
         assertNull(url.podcastId)
         assertNull(url.episodePubDateMs)
+        assertEquals(emptyList<ManualDownloadEntity>(), database.manualDownloadDao().getActive())
         database.close()
         Unit
     }
