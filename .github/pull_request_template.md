@@ -31,6 +31,7 @@ CI is required to run these independent gates:
 - [ ] TalkBack or semantics checked where controls changed
 - [ ] Offline / interrupted-network behavior checked where data flow changed
 - [ ] Process or activity recreation checked where state ownership changed
+- [ ] Bluetooth/headset and notification controls checked where playback behavior changed
 
 ### Storage and migration changes
 
@@ -42,7 +43,7 @@ CI is required to run these independent gates:
 
 ## Documentation
 
-- [ ] Relevant README, CLAUDE guidance, and feature specs match the implemented behavior
+- [ ] Relevant README, CLAUDE guidance, and feature specs match behavior and distinguish approved/planned work from shipped behavior
 - [ ] New or changed migration has an exported Room schema and migration test
 
 ## Risk and rollback
