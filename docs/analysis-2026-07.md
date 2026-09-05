@@ -2,8 +2,8 @@
 
 A full-codebase audit across four areas: UI/UX, performance, feature completeness, and AI/learning
 integration opportunities. Findings carry `file:line` references against the state of the repo at the
-time of the audit (post-#51). Items marked **[FIXED]** were addressed in the commits accompanying this
-document; everything else is roadmap.
+time of the audit (post-#51). **[FIXED]** items shipped with the original audit work; **[RESOLVED]**
+or **[RESOLVED LATER]** items were completed by subsequent PRs. Unmarked items remain roadmap.
 
 ---
 
@@ -106,16 +106,15 @@ Ranked by user-visible impact.
    The factory args in `PodcastNavHost.kt:99-107` also aren't `remember`ed. Roadmap: move construction to
    `PodcastApplication` (background prewarm) and `remember` the graph in the NavHost.
 7. **Build/deps debt:** Compose BOM `2023.10.01` (misses 2+ years of Lazy-list/strong-skipping perf work),
-   Media3 `1.2.1`, Kotlin `1.9.20`/compiler `1.5.4`, `enableJetifier=true` (slows every build, likely
-   unneeded), legacy `androidx.media:media` alongside Media3, **no baseline profile** (meaningful
-   cold-start win for a Compose+Media3 app). CI never runs the release/R8 build, so the hand-written
-   keep rules for Gson-reflected models are untested.
+   Media3 `1.2.1`, Kotlin `1.9.20`/compiler `1.5.4`, legacy `androidx.media:media` alongside Media3, and
+   **no baseline profile** remain. **[RESOLVED LATER]** Milestone PR 1 disabled Jetifier and added a
+   release/R8 CI build, so those two original audit findings are no longer current.
 8. Smaller items: `SimpleDateFormat` allocated per episode per format attempt in the RSS parse loop
    (`RssParser.kt:186-189`); `AutoDownloadWorker.enqueuePeriodic` runs a prefs read + WorkManager enqueue on the main thread in
    `Application.onCreate` (`PodcastApplication.kt:46`); yt-dlp self-update hits the network on every cold
    start (`PodcastApplication.kt:62-72`) — should be throttled to ~daily; no `@Index` on
-   `downloaded_episodes.podcastId` / `playback_progress.podcastId`. Schema export and a migration test
-   now exist, but that test is instrumentation-only and is not executed in CI.
+   `downloaded_episodes.podcastId` / `playback_progress.podcastId`. **[RESOLVED LATER]** Schemas are
+   exported and the migration test now runs in the API 34 connected-test CI job.
 
 ---
 
@@ -171,10 +170,10 @@ Ranked by user-visible impact.
 - Android Auto (`MediaLibraryService` + content tree + manifest declaration), Chromecast (`media3-cast`),
   Wear.
 - `strings.xml` migration; edge-to-edge + splash; dependency refresh (Compose BOM, Media3 1.4+,
-  Kotlin 2.x + strong skipping, drop Jetifier); baseline profile; predictive back.
+  Kotlin 2.x + strong skipping); baseline profile; predictive back. Jetifier is already disabled.
 - Cookie/login support for age-gated YouTube/X downloads; ABI splits or app bundle to cut the ~50 MB+
   yt-dlp/ffmpeg APK weight; `FileProvider` for sharing downloads out.
-- Room: indices on `podcastId` columns, `exportSchema = true` + migration tests.
+- Room: add indices on `podcastId` columns; schema export and migration tests are already implemented.
 - Statistics (listening time), per-podcast settings (speed, auto-download count cap), full settings
   backup/export.
 
@@ -246,6 +245,6 @@ download; a release-build (R8) smoke test of the full flow.
 
 | Priority | Items |
 |---|---|
-| **P0 — this branch** | Feed timeouts + TTL cache · download-progress throttling (RSS + URL) · main-thread IPC fix in playback snapshots · session persistence off main thread · Play-Queue spec-004 correction + parallel fetch · partial URL-download cleanup + orphan sweep · this document + CLAUDE.md corrections |
+| **P0 — original audit branch (historical)** | Feed timeouts + TTL cache · download-progress throttling (RSS + URL) · main-thread IPC fix in playback snapshots · session persistence off main thread · Play-Queue spec-004 correction + parallel fetch · partial URL-download cleanup + orphan sweep · this document + CLAUDE.md corrections |
 | **P1 — next sessions** | First reliability milestone per spec 007: canonical media availability · transactional deletion · request-bound Add flows · four-tab shared shell + global Settings · persistent mini-player · Queue-local show management · show-detail parity · unified download activity · cached offline Queue. Follow later with episode-level Up next, HTTP Range resume, new-episode awareness, URL quality/resume, skip-silence, service-side sleep timer, and other playback improvements. |
-| **P2 — later** | strings.xml/i18n · edge-to-edge + splash · dependency refresh + baseline profile · Android Auto/Cast · chapters · OPML completeness · Room indices/schema export · APK slimming (ABI splits) · statistics & per-podcast settings |
+| **P2 — later** | strings.xml/i18n · edge-to-edge + splash · dependency refresh + baseline profile · Android Auto/Cast · chapters · OPML completeness · Room indices · APK slimming (ABI splits) · statistics & per-podcast settings |
