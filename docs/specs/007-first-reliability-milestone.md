@@ -22,8 +22,8 @@ Keep four top-level destinations:
 3. Queue
 4. Downloads
 
-Settings is not a fifth tab. A consistently placed Settings action is available from root screens
-and show detail. Settings returns to the route that opened it.
+Settings is not a fifth tab. A consistently placed global Settings gear is available from every
+root screen and show detail. Settings returns to the route that opened it.
 
 One application shell owns root navigation, insets, bottom content reservation, and the mini-player.
 The mini-player is available during ordinary browsing, including Downloads and Settings, and is
@@ -80,9 +80,8 @@ feed freshness.
 9. Unified Waiting / In progress / Needs attention / Downloaded activity.
 10. Persistent feed snapshots and offline Queue playback.
 
-Detailed PR dependencies and acceptance criteria live in the implementation plan linked from the
-audit thread. Each PR remains independently reviewable and updates relevant specifications with its
-behavior.
+This sequence is the repository-level dependency contract. Each PR remains independently reviewable
+and updates the relevant specifications with its implemented behavior.
 
 ## 4. Verification contract
 
@@ -93,9 +92,9 @@ Every pull request runs independent CI jobs for:
 - debug and release assembly (`assembleDebug assembleRelease`)
 - API 34 connected instrumentation tests (`connectedDebugAndroidTest`)
 
-Reports are uploaded even when a gate fails. Build artifacts are uploaded only after successful
-assembly. Storage and migration changes also require the manual API 28/29/34 checks in the
-pull-request template; CI green does not replace those checks.
+Reports are uploaded after success or failure unless the run is cancelled. Build artifacts are uploaded
+only after successful assembly. Storage and migration PRs must document the applicable manual API
+28/29/34 checks prompted by the pull-request template; CI green does not replace those checks.
 
 ## 5. Milestone acceptance
 
