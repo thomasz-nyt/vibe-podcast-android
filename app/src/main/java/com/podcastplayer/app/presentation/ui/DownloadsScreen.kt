@@ -55,6 +55,7 @@ import coil.compose.AsyncImage
 import com.podcastplayer.app.R
 import com.podcastplayer.app.data.local.UrlDownloadEntity
 import com.podcastplayer.app.data.local.DuplicateCleanupPlan
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
 import com.podcastplayer.app.data.repository.UrlSource
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.presentation.viewmodel.RestoreDownloadsState
@@ -76,7 +77,11 @@ data class DownloadEntryUi(
     val artworkUrl: String?,
     /** Playable Episode — used by the play handler regardless of source. */
     val episode: Episode,
-    /** On-disk byte count for this entry. 0 if unknown. */
+    /** Present-day readability of the persisted payload. */
+    val availability: MediaPayloadAvailability,
+    /** Whether the original source can replace a missing/unreadable payload. */
+    val canRepair: Boolean = false,
+    /** On-disk byte count for this entry. 0 if unavailable or unknown. */
     val sizeBytes: Long = 0L,
 ) {
     enum class Kind { PODCAST, URL_AUDIO, URL_VIDEO }
@@ -108,6 +113,8 @@ fun DownloadsScreen(
     maintenanceMessage: String? = null,
     onPlay: (DownloadEntryUi) -> Unit,
     onDelete: (DownloadEntryUi) -> Unit,
+    onRepair: (DownloadEntryUi) -> Unit = {},
+    onGrantMediaAccess: () -> Unit = {},
     onRetryUrlDownload: (String) -> Unit = {},
     onDeleteUrlDownload: (String) -> Unit = {},
     /**
@@ -126,10 +133,11 @@ fun DownloadsScreen(
 ) {
     var showDeleteAllDialog by remember { mutableStateOf(false) }
     var maintenanceMenuOpen by remember { mutableStateOf(false) }
-    val eyebrow = if (entries.isEmpty()) {
+    val availableCount = entries.count { it.availability is MediaPayloadAvailability.Available }
+    val eyebrow = if (availableCount == 0) {
         "Offline"
     } else {
-        "Offline · ${entries.size} item${if (entries.size == 1) "" else "s"} · ${formatBytes(totalBytes)}"
+        "Offline · $availableCount item${if (availableCount == 1) "" else "s"} · ${formatBytes(totalBytes)}"
     }
     // Offer restore prominently when the library looks freshly wiped (typical
     // post-reinstall state); it stays reachable from the ⋯ menu otherwise.
@@ -277,6 +285,8 @@ fun DownloadsScreen(
                             entry = entry,
                             onPlay = { onPlay(entry) },
                             onDelete = { onDelete(entry) },
+                            onRepair = { onRepair(entry) },
+                            onGrantMediaAccess = onGrantMediaAccess,
                         )
                     }
                 }
@@ -429,16 +439,19 @@ private fun DownloadRow(
     entry: DownloadEntryUi,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
+    onRepair: () -> Unit,
+    onGrantMediaAccess: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(14.dp)
+    val canPlay = entry.availability is MediaPayloadAvailability.Available
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(colors.surface)
             .border(1.dp, colors.outline, shape)
-            .clickable(onClick = onPlay)
+            .clickable(enabled = canPlay, onClick = onPlay)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -478,6 +491,16 @@ private fun DownloadRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (!canPlay) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = availabilityLabel(entry.availability),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.error,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         Spacer(Modifier.width(8.dp))
         VibeCircleIconButton(
@@ -487,16 +510,50 @@ private fun DownloadRow(
             size = 36.dp,
             iconSize = 18.dp,
         )
-        Spacer(Modifier.width(6.dp))
-        VibeCircleIconButton(
-            icon = Icons.Default.PlayArrow,
-            description = "Play",
-            onClick = onPlay,
-            size = 40.dp,
-            iconSize = 22.dp,
-            tinted = true,
-        )
+        when (entry.availability) {
+            is MediaPayloadAvailability.Available -> {
+                Spacer(Modifier.width(6.dp))
+                VibeCircleIconButton(
+                    icon = Icons.Default.PlayArrow,
+                    description = "Play ${entry.title}",
+                    onClick = onPlay,
+                    size = 40.dp,
+                    iconSize = 22.dp,
+                    tinted = true,
+                )
+            }
+            is MediaPayloadAvailability.PermissionRequired -> {
+                Spacer(Modifier.width(6.dp))
+                VibeCircleIconButton(
+                    icon = Icons.Outlined.Restore,
+                    description = "Grant media access for ${entry.title}",
+                    onClick = onGrantMediaAccess,
+                    size = 40.dp,
+                    iconSize = 20.dp,
+                    tinted = true,
+                )
+            }
+            is MediaPayloadAvailability.Missing,
+            is MediaPayloadAvailability.Unreadable -> if (entry.canRepair) {
+                Spacer(Modifier.width(6.dp))
+                VibeCircleIconButton(
+                    icon = Icons.Outlined.Refresh,
+                    description = "Download ${entry.title} again",
+                    onClick = onRepair,
+                    size = 40.dp,
+                    iconSize = 20.dp,
+                    tinted = true,
+                )
+            }
+        }
     }
+}
+
+private fun availabilityLabel(availability: MediaPayloadAvailability): String = when (availability) {
+    is MediaPayloadAvailability.Available -> "Available offline"
+    is MediaPayloadAvailability.Missing -> "File missing"
+    is MediaPayloadAvailability.PermissionRequired -> "Media access required"
+    is MediaPayloadAvailability.Unreadable -> "File can’t be read"
 }
 
 /**
@@ -550,6 +607,9 @@ private fun RestoreDownloadsCard(
                             "${state.suggestions.size} title-based suggestion" +
                                 (if (state.suggestions.size == 1) "" else "s") +
                                 " found. Nothing is linked without your confirmation."
+                    is RestoreDownloadsState.PermissionRequired ->
+                        "Media access required" to
+                            "Grant access to find downloads created by a previous installation."
                     is RestoreDownloadsState.Done ->
                         if (state.restoredEpisodes == 0 && state.importedClips == 0) {
                             "Nothing to restore" to "No previously downloaded files were found."
@@ -589,6 +649,8 @@ private fun RestoreDownloadsCard(
                 is RestoreDownloadsState.Running -> Unit
                 is RestoreDownloadsState.ReviewLegacy ->
                     VibeChip(label = "Review", onClick = onReviewLegacy)
+                is RestoreDownloadsState.PermissionRequired ->
+                    VibeChip(label = "Grant access", onClick = onRestore)
                 is RestoreDownloadsState.Done,
                 is RestoreDownloadsState.Failed -> VibeChip(label = "Dismiss", onClick = onDismiss)
             }
