@@ -1,15 +1,20 @@
 package com.podcastplayer.app.presentation.viewmodel
 
+import com.podcastplayer.app.data.local.DownloadedEpisodeEntity
 import com.podcastplayer.app.data.local.ManualDownloadEntity
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
 import com.podcastplayer.app.data.local.ManualDownloadStatus
 import com.podcastplayer.app.data.local.PlaybackProgressEntity
+import com.podcastplayer.app.data.repository.ResolvedDownloadedEpisode
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import java.util.Date
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -170,6 +175,42 @@ class PodcastViewModelTest {
         assertNull(snapshot.failureMessage)
     }
 
+    @Test
+    fun `episode hydration sets available local media`() {
+        val remote = episode("episode", "podcast", pubDateMs = 1_000L)
+        val entity = downloadedEntity(remote, "/downloads/episode.mp3")
+        val resolved = ResolvedDownloadedEpisode(
+            entity = entity,
+            episode = remote,
+            availability = MediaPayloadAvailability.Available(entity.localPath, sizeBytes = 10L),
+        )
+
+        val hydrated = hydrateEpisodesWithDownloads(listOf(remote), listOf(resolved)).single()
+
+        assertTrue(hydrated.isDownloaded)
+        assertEquals(entity.localPath, hydrated.localPath)
+        assertEquals(remote.title, hydrated.title)
+    }
+
+    @Test
+    fun `episode hydration clears a previously copied stale path`() {
+        val previouslyHydrated = episode("episode", "podcast", pubDateMs = 1_000L).copy(
+            isDownloaded = true,
+            localPath = "/downloads/stale.mp3",
+        )
+        val entity = downloadedEntity(previouslyHydrated, "/downloads/stale.mp3")
+        val resolved = ResolvedDownloadedEpisode(
+            entity = entity,
+            episode = previouslyHydrated,
+            availability = MediaPayloadAvailability.Missing(entity.localPath),
+        )
+
+        val hydrated = hydrateEpisodesWithDownloads(listOf(previouslyHydrated), listOf(resolved)).single()
+
+        assertFalse(hydrated.isDownloaded)
+        assertNull(hydrated.localPath)
+    }
+
     private fun podcast(id: String, feedUrl: String?) = Podcast(
         id = id,
         title = id,
@@ -186,6 +227,19 @@ class PodcastViewModelTest {
         pubDate = pubDateMs?.let(::Date),
         audioUrl = "https://example.com/$id.mp3",
         duration = null,
+    )
+
+    private fun downloadedEntity(episode: Episode, localPath: String) = DownloadedEpisodeEntity(
+        id = episode.id,
+        podcastId = episode.podcastId,
+        title = episode.title,
+        description = episode.description,
+        pubDate = episode.pubDate?.time,
+        audioUrl = episode.audioUrl,
+        duration = episode.duration,
+        localPath = localPath,
+        fileSize = 10L,
+        downloadDate = 1L,
     )
 
     private fun progress(episodeId: String, podcastId: String, completed: Boolean) = PlaybackProgressEntity(
