@@ -175,12 +175,20 @@ class UrlDownloadService : Service() {
                 extension = if (requestedType == MediaType.VIDEO) "mp4" else "mp3",
                 identity = MediaIdentity.url(entity.id),
             )
-            val reusable = MediaStoreScanner(applicationContext)
+            when (val reusable = MediaStoreScanner(applicationContext)
                 .findExisting(isVideo = requestedType == MediaType.VIDEO, expectedDisplayName = expectedName)
-            if (reusable != null) {
-                repository.markCompleted(id, reusable.uriString, reusable.sizeBytes)
-                updateNotification(buildCompletedNotification(entity.title))
-                return
+            ) {
+                is MediaStoreScanner.FindExistingResult.Found -> {
+                    repository.markCompleted(id, reusable.item.uriString, reusable.item.sizeBytes)
+                    updateNotification(buildCompletedNotification(entity.title))
+                    return
+                }
+                is MediaStoreScanner.FindExistingResult.Failed -> {
+                    repository.markFailed(id, "Could not inspect existing media: ${reusable.message}")
+                    return
+                }
+                is MediaStoreScanner.FindExistingResult.PermissionRequired,
+                MediaStoreScanner.FindExistingResult.NotFound -> Unit
             }
 
             if (!PodcastApplication.youtubeDlReady) {
