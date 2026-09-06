@@ -90,14 +90,24 @@ class DownloadManager(private val context: Context) {
                     expectedDisplayName = displayName,
                 )) {
                     is MediaStoreScanner.FindExistingResult.Found -> {
-                        onProgress(1f)
-                        val entity = episode.toEntity(
-                            localPath = reusable.item.uriString,
-                            fileSize = reusable.item.sizeBytes,
-                            origin = origin,
-                        )
-                        dao.insertEpisode(entity)
-                        return@withContext Result.success(reusable.item.uriString)
+                        when (val availability = payloadProbe.probe(reusable.item.uriString)) {
+                            is MediaPayloadAvailability.Available -> {
+                                onProgress(1f)
+                                val entity = episode.toEntity(
+                                    localPath = availability.reference,
+                                    fileSize = availability.sizeBytes ?: reusable.item.sizeBytes,
+                                    origin = origin,
+                                )
+                                dao.insertEpisode(entity)
+                                return@withContext Result.success(availability.reference)
+                            }
+                            is MediaPayloadAvailability.PermissionRequired ->
+                                return@withContext Result.failure(
+                                    MediaPermissionRequiredException(availability.reference),
+                                )
+                            is MediaPayloadAvailability.Missing,
+                            is MediaPayloadAvailability.Unreadable -> Unit
+                        }
                     }
                     is MediaStoreScanner.FindExistingResult.PermissionRequired -> {
                         if (existing != null) {
