@@ -76,9 +76,9 @@ class DownloadManager(private val context: Context) {
                     return@withContext Result.success(availability.reference)
                 is MediaPayloadAvailability.PermissionRequired ->
                     return@withContext Result.failure(MediaPermissionRequiredException(availability.reference))
-                is MediaPayloadAvailability.Unreadable ->
-                    return@withContext Result.failure(MediaUnreadableException(availability.reference, availability.reason))
-                is MediaPayloadAvailability.Missing, null -> Unit
+                is MediaPayloadAvailability.Missing,
+                is MediaPayloadAvailability.Unreadable,
+                null -> Unit // Keep metadata and attempt a verified replacement.
             }
 
             if (MediaStoreSaver.isSupported()) {
