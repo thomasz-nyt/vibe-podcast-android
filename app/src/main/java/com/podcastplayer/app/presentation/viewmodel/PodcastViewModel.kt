@@ -2,8 +2,10 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.podcastplayer.app.data.local.CanonicalMediaReference
 import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaIdentity
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
 import com.podcastplayer.app.data.local.MediaFileCandidate
 import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.local.ManualDownloadEntity
@@ -21,6 +23,7 @@ import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.ManualDownloadRepository
+import com.podcastplayer.app.data.repository.ResolvedDownloadedEpisode
 import com.podcastplayer.app.data.repository.PodcastRepository
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.domain.model.Episode
@@ -62,6 +65,7 @@ class PodcastViewModel(
 
     private val _episodesUiState = MutableStateFlow<EpisodesUiState>(EpisodesUiState.Initial)
     val episodesUiState: StateFlow<EpisodesUiState> = _episodesUiState.asStateFlow()
+    private var feedEpisodes: List<Episode> = emptyList()
 
     private val _selectedPodcast = MutableStateFlow<Podcast?>(null)
     val selectedPodcast: StateFlow<Podcast?> = _selectedPodcast.asStateFlow()
@@ -69,6 +73,7 @@ class PodcastViewModel(
     private val _selectedEpisode = MutableStateFlow<Episode?>(null)
     val selectedEpisode: StateFlow<Episode?> = _selectedEpisode.asStateFlow()
 
+    private val _resolvedDownloadedEpisodes = MutableStateFlow<List<ResolvedDownloadedEpisode>>(emptyList())
     private val _downloadedEpisodes = MutableStateFlow<List<Episode>>(emptyList())
     val downloadedEpisodes: StateFlow<List<Episode>> = _downloadedEpisodes.asStateFlow()
 
@@ -98,26 +103,35 @@ class PodcastViewModel(
         queue?.podcastIds?.mapNotNull { savedMap[it] } ?: emptyList()
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    val downloadedEpisodesAll: StateFlow<List<Episode>> = downloadManager
-        .getAllDownloadedEpisodesFlow()
+    private val resolvedDownloadsAll: StateFlow<List<ResolvedDownloadedEpisode>> = downloadManager
+        .getAllResolvedDownloadsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val downloadedEpisodesAll: StateFlow<List<Episode>> = resolvedDownloadsAll
+        .map { list ->
+            list.mapNotNull { resolved ->
+                resolved.episode.takeIf { resolved.availability is MediaPayloadAvailability.Available }
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val downloadedEpisodesUi: StateFlow<List<DownloadedEpisodeUi>> = combine(
-        downloadedEpisodesAll,
-        savedPodcasts
-    ) { episodes, podcasts ->
+        resolvedDownloadsAll,
+        savedPodcasts,
+    ) { downloads, podcasts ->
         val map = podcasts.associateBy { it.id }
-        episodes.map { episode ->
+        downloads.map { resolved ->
             DownloadedEpisodeUi(
-                episode = episode,
-                podcastTitle = map[episode.podcastId]?.title,
-                podcastArtworkUrl = map[episode.podcastId]?.artworkUrl
+                episode = resolved.episode,
+                podcastTitle = map[resolved.episode.podcastId]?.title,
+                podcastArtworkUrl = map[resolved.episode.podcastId]?.artworkUrl,
+                availability = resolved.availability,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** All completed URL downloads (`url:<id>` mediaId space). Empty if the repository wasn't injected. */
-    private val urlCompletedFlow = urlDownloadRepository?.observeCompleted()
+    /** Completed URL transfers resolved against their current local payload. */
+    private val urlCompletedFlow = urlDownloadRepository?.observeResolvedCompleted()
         ?: kotlinx.coroutines.flow.flowOf(emptyList())
 
     /**
@@ -130,8 +144,12 @@ class PodcastViewModel(
         urlCompletedFlow,
         playbackProgressDao.observeInProgress(),
     ) { downloads, urlDownloads, progress ->
-        val rssById = downloads.associateBy { it.episode.id }
-        val urlById = urlDownloads.associateBy { "url:${it.id}" }
+        val rssById = downloads
+            .filter { it.availability is MediaPayloadAvailability.Available }
+            .associateBy { it.episode.id }
+        val urlById = urlDownloads
+            .filter { it.availability is MediaPayloadAvailability.Available }
+            .associateBy { "url:${it.entity.id}" }
         progress.mapNotNull { entry ->
             val fraction = if (entry.durationMs > 0L) {
                 (entry.positionMs.toFloat() / entry.durationMs.toFloat()).coerceIn(0f, 1f)
@@ -146,12 +164,12 @@ class PodcastViewModel(
                     remainingMs = remainingMs,
                 )
             }
-            val urlEntity = urlById[entry.episodeId] ?: return@mapNotNull null
-            val episode = urlDownloadRepository?.toEpisode(urlEntity) ?: return@mapNotNull null
+            val resolvedUrl = urlById[entry.episodeId] ?: return@mapNotNull null
+            val episode = urlDownloadRepository?.toEpisode(resolvedUrl) ?: return@mapNotNull null
             ContinueListeningUi(
                 episode = episode,
-                podcastTitle = urlEntity.uploader ?: urlEntity.source.uppercase(),
-                podcastArtworkUrl = urlEntity.thumbnailUrl,
+                podcastTitle = resolvedUrl.entity.uploader ?: resolvedUrl.entity.source.uppercase(),
+                podcastArtworkUrl = resolvedUrl.entity.thumbnailUrl,
                 progressFraction = fraction,
                 remainingMs = remainingMs,
             )
@@ -209,6 +227,7 @@ class PodcastViewModel(
     }
 
     fun selectPodcast(podcast: Podcast) {
+        feedEpisodes = emptyList()
         _selectedPodcast.value = podcast
         observeDownloads(podcast)
         observePlaybackProgress(podcast)
@@ -218,8 +237,11 @@ class PodcastViewModel(
     private fun observeDownloads(podcast: Podcast) {
         downloadsJob?.cancel()
         downloadsJob = viewModelScope.launch {
-            downloadManager.getDownloadedEpisodesFlow(podcast.id).collect { episodes ->
-                _downloadedEpisodes.value = episodes
+            downloadManager.getResolvedDownloadsFlow(podcast.id).collect { downloads ->
+                _resolvedDownloadedEpisodes.value = downloads
+                _downloadedEpisodes.value = downloads.mapNotNull { resolved ->
+                    resolved.episode.takeIf { resolved.availability is MediaPayloadAvailability.Available }
+                }
                 refreshEpisodesWithDownloads()
             }
         }
@@ -255,16 +277,10 @@ class PodcastViewModel(
     }
 
     private fun refreshEpisodesWithDownloads() {
-        val currentState = _episodesUiState.value
-        if (currentState is EpisodesUiState.Success) {
-            val downloadedMap = _downloadedEpisodes.value.associateBy { it.id }
-            val updated = currentState.episodes.map { episode ->
-                downloadedMap[episode.id]?.let { downloaded ->
-                    episode.copy(isDownloaded = true, localPath = downloaded.localPath ?: downloaded.audioUrl)
-                } ?: episode
-            }
-            _episodesUiState.value = EpisodesUiState.Success(updated)
-        }
+        if (_episodesUiState.value !is EpisodesUiState.Success || feedEpisodes.isEmpty()) return
+        _episodesUiState.value = EpisodesUiState.Success(
+            hydrateEpisodesWithDownloads(feedEpisodes, _resolvedDownloadedEpisodes.value),
+        )
     }
 
     private fun loadEpisodes(podcast: Podcast, forceRefresh: Boolean = false) {
@@ -276,7 +292,8 @@ class PodcastViewModel(
             }
             repository.getEpisodes(feedUrl, podcast.id, forceRefresh).fold(
                 onSuccess = { episodes ->
-                    _episodesUiState.value = EpisodesUiState.Success(episodes)
+                    feedEpisodes = episodes.map { it.copy(isDownloaded = false, localPath = null) }
+                    _episodesUiState.value = EpisodesUiState.Success(feedEpisodes)
                     refreshEpisodesWithDownloads()
                 },
                 onFailure = { error ->
@@ -313,6 +330,10 @@ class PodcastViewModel(
 
     fun clearDownloadError() {
         _downloadError.value = null
+    }
+
+    fun refreshDownloadAvailability() {
+        downloadManager.refreshAvailability()
     }
 
     /**
@@ -352,17 +373,33 @@ class PodcastViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val found = scanner.scanAll().filter { it.sizeBytes > 0L }
+                val found = when (val scan = scanner.scanAll()) {
+                    is MediaStoreScanner.ScanResult.Success -> scan.items.filter { it.sizeBytes > 0L }
+                    is MediaStoreScanner.ScanResult.PermissionRequired -> {
+                        _restoreState.value = RestoreDownloadsState.PermissionRequired
+                        return@launch
+                    }
+                    is MediaStoreScanner.ScanResult.Failed -> {
+                        _restoreState.value = RestoreDownloadsState.Failed(scan.message)
+                        return@launch
+                    }
+                }
                 if (found.isEmpty()) {
                     _restoreState.value = RestoreDownloadsState.Done(0, 0)
                     return@launch
                 }
 
-                val referencedUris = buildSet {
-                    downloadManager.getAllDownloadedEntitiesFlow().first().forEach { add(it.localPath) }
-                    urlDownloadRepository?.observeAll()?.first()?.forEach { it.localPath?.let(::add) }
+                val referencedKeys = buildSet {
+                    downloadManager.getAllDownloadedEntitiesFlow().first().forEach {
+                        add(CanonicalMediaReference.keyOf(it.localPath))
+                    }
+                    urlDownloadRepository?.observeAll()?.first()?.forEach { entity ->
+                        entity.localPath?.let { add(CanonicalMediaReference.keyOf(it)) }
+                    }
                 }
-                val candidates = found.filterNot { it.uriString in referencedUris }.map { it.toCandidate() }
+                val candidates = found
+                    .filterNot { it.canonicalKey in referencedKeys }
+                    .map { it.toCandidate() }
                 val episodeById = linkedMapOf<String, Episode>()
                 val restoreEpisodes = mutableListOf<RestoreEpisodeCandidate>()
                 for (podcast in savedPodcastsStorage.savedPodcasts.value) {
@@ -385,14 +422,15 @@ class PodcastViewModel(
                 var restoredEpisodes = 0
                 plan.exactMatches.forEach { (episodeId, file) ->
                     val episode = episodeById[episodeId] ?: return@forEach
-                    downloadManager.registerExistingDownload(episode, file.uriString, file.sizeBytes)
-                    urlDownloadRepository?.removeRestoredFor(file.uriString)
-                    restoredEpisodes++
+                    if (downloadManager.registerExistingDownload(episode, file.uriString, file.sizeBytes)) {
+                        urlDownloadRepository?.removeRestoredFor(file.uriString)
+                        restoredEpisodes++
+                    }
                 }
 
                 var importedClips = 0
                 val unidentified = plan.unidentified + plan.legacySuggestions.map { it.file }
-                for (file in unidentified.distinctBy { it.uriString }) {
+                for (file in unidentified.distinctBy { CanonicalMediaReference.keyOf(it.uriString) }) {
                     val imported = urlDownloadRepository?.importRestored(
                         displayName = "Unidentified - ${MediaNaming.titleFromDisplayName(file.displayName)}",
                         uriString = file.uriString,
@@ -431,14 +469,18 @@ class PodcastViewModel(
             val scanner = mediaScanner ?: return@withContext MediaStoreScanner.MutationResult.Failed
             when (val result = scanner.rename(match.file.uriString, match.identifiedDisplayName)) {
                 MediaStoreScanner.MutationResult.Success -> {
-                    downloadManager.registerExistingDownload(
+                    val registered = downloadManager.registerExistingDownload(
                         episode = match.episode,
                         localPath = match.file.uriString,
                         fileSize = match.file.sizeBytes,
                     )
-                    urlDownloadRepository?.removeRestoredFor(match.file.uriString)
-                    refreshEpisodesWithDownloads()
-                    result
+                    if (registered) {
+                        urlDownloadRepository?.removeRestoredFor(match.file.uriString)
+                        refreshEpisodesWithDownloads()
+                        result
+                    } else {
+                        MediaStoreScanner.MutationResult.Failed
+                    }
                 }
                 else -> result
             }
@@ -460,15 +502,24 @@ class PodcastViewModel(
      */
     suspend fun planDuplicateCleanup(): DuplicateCleanupPlan = withContext(Dispatchers.IO) {
         val scanner = mediaScanner ?: return@withContext DuplicateCleanupPlan(emptyList(), emptyList())
-        val found = scanner.scanAll()
-        val referencedUris = buildSet {
-            downloadManager.getAllDownloadedEntitiesFlow().first().forEach { add(it.localPath) }
-            urlDownloadRepository?.observeAll()?.first()?.forEach { it.localPath?.let(::add) }
+        val found = when (val scan = scanner.scanAll()) {
+            is MediaStoreScanner.ScanResult.Success -> scan.items
+            is MediaStoreScanner.ScanResult.PermissionRequired ->
+                throw MediaScanUnavailableException("Media access is required to inspect duplicate files")
+            is MediaStoreScanner.ScanResult.Failed -> throw MediaScanUnavailableException(scan.message)
+        }
+        val referencedKeys = buildSet {
+            downloadManager.getAllDownloadedEntitiesFlow().first().forEach {
+                add(CanonicalMediaReference.keyOf(it.localPath))
+            }
+            urlDownloadRepository?.observeAll()?.first()?.forEach { entity ->
+                entity.localPath?.let { add(CanonicalMediaReference.keyOf(it)) }
+            }
         }
         val hashableSizes = found.groupBy { it.sizeBytes }.filterValues { it.size > 1 }.keys
         val candidates = found.map { media ->
             media.toCandidate(
-                isProtected = media.uriString in referencedUris,
+                isProtected = media.canonicalKey in referencedKeys,
                 sha256 = if (media.sizeBytes in hashableSizes) scanner.sha256(media.uriString) else null,
             )
         }
@@ -649,8 +700,12 @@ class PodcastViewModel(
         // hand the rest to the caller for the consent dialog.
         val scanner = mediaScanner
         if (scanner != null) {
-            scanner.scanAll().forEach { found ->
-                if (!scanner.deleteDirect(found.uriString)) consent += found.uriString
+            when (val scan = scanner.scanAll()) {
+                is MediaStoreScanner.ScanResult.Success -> scan.items.forEach { found ->
+                    if (!scanner.deleteDirect(found.uriString)) consent += found.uriString
+                }
+                is MediaStoreScanner.ScanResult.PermissionRequired,
+                is MediaStoreScanner.ScanResult.Failed -> Unit // PR 3 will make bulk deletion transactional.
             }
         }
         refreshEpisodesWithDownloads()
@@ -708,6 +763,20 @@ class PodcastViewModel(
     }
 }
 
+internal fun hydrateEpisodesWithDownloads(
+    feedEpisodes: List<Episode>,
+    downloads: List<ResolvedDownloadedEpisode>,
+): List<Episode> {
+    val downloadedMap = downloads.associateBy { it.entity.id }
+    return feedEpisodes.map { episode ->
+        val available = downloadedMap[episode.id]?.availability as? MediaPayloadAvailability.Available
+        episode.copy(
+            isDownloaded = available != null,
+            localPath = available?.reference,
+        )
+    }
+}
+
 internal data class ManualDownloadUiSnapshot(
     val progressByEpisodeId: Map<String, Float>,
     val failedRequestIds: List<String>,
@@ -744,7 +813,8 @@ internal fun buildManualDownloadUiSnapshot(
 data class DownloadedEpisodeUi(
     val episode: Episode,
     val podcastTitle: String?,
-    val podcastArtworkUrl: String?
+    val podcastArtworkUrl: String?,
+    val availability: MediaPayloadAvailability,
 )
 
 data class ContinueListeningUi(
@@ -795,8 +865,11 @@ sealed class RestoreDownloadsState {
 
     /** [restoredEpisodes] relinked to subscriptions; [importedClips] kept as orphan entries. */
     data class Done(val restoredEpisodes: Int, val importedClips: Int) : RestoreDownloadsState()
+    data object PermissionRequired : RestoreDownloadsState()
     data class Failed(val message: String) : RestoreDownloadsState()
 }
+
+class MediaScanUnavailableException(message: String) : IllegalStateException(message)
 
 data class LegacyRestoreMatch(
     val episode: Episode,
