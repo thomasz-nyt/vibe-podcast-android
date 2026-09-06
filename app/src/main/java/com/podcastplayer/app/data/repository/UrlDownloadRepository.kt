@@ -3,8 +3,11 @@ package com.podcastplayer.app.data.repository
 import android.content.Context
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.CanonicalMediaReference
 import com.podcastplayer.app.data.local.DownloadOrigin
 import com.podcastplayer.app.data.local.MediaNaming
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
+import com.podcastplayer.app.data.local.MediaPayloadProbe
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.UrlDownloadDao
 import com.podcastplayer.app.data.local.UrlDownloadEntity
@@ -18,11 +21,19 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.mapper.VideoInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Date
+
+data class ResolvedUrlDownload(
+    val entity: UrlDownloadEntity,
+    val availability: MediaPayloadAvailability,
+)
 
 /**
  * Repository for the "Add from URL" feature (issue #33).
@@ -38,6 +49,9 @@ import java.util.Date
  */
 class UrlDownloadRepository(private val context: Context) {
 
+    private val payloadProbe = MediaPayloadProbe(context)
+    private val availabilityRefresh = MutableStateFlow(0L)
+
     private val dao: UrlDownloadDao
         get() = DatabaseProvider.getDatabase(context).urlDownloadDao()
 
@@ -47,9 +61,22 @@ class UrlDownloadRepository(private val context: Context) {
 
     fun observeAll(): Flow<List<UrlDownloadEntity>> = dao.observeAll()
 
-    /** Just the COMPLETED items, newest first — what the home screen surfaces. */
-    fun observeCompleted(): Flow<List<UrlDownloadEntity>> =
-        dao.observeByStatus(UrlDownloadStatus.COMPLETED.name)
+    /** Just the COMPLETED items, newest first. Transfer completion is not payload truth. */
+    fun refreshAvailability() {
+        availabilityRefresh.value += 1L
+    }
+
+    fun observeResolvedCompleted(): Flow<List<ResolvedUrlDownload>> =
+        combine(dao.observeByStatus(UrlDownloadStatus.COMPLETED.name), availabilityRefresh) { list, _ ->
+            list.map { entity -> ResolvedUrlDownload(entity, payloadProbe.probe(entity.localPath)) }
+        }.flowOn(Dispatchers.IO)
+
+    /** Available completed items for legacy Home call sites. */
+    fun observeCompleted(): Flow<List<UrlDownloadEntity>> = observeResolvedCompleted().map { list ->
+        list.mapNotNull { resolved ->
+            resolved.entity.takeIf { resolved.availability is MediaPayloadAvailability.Available }
+        }
+    }
 
     /** Items currently in flight (queued / extracting / downloading). */
     fun observeInFlight(): Flow<List<UrlDownloadEntity>> = dao.observeAll().map { all ->
@@ -119,8 +146,14 @@ class UrlDownloadRepository(private val context: Context) {
         val source = UrlSource.classify(rawUrl)
 
         val existing = dao.getById(id)
-        if (existing != null && existing.status in IN_FLIGHT_STATUSES + UrlDownloadStatus.COMPLETED.name) {
-            return@withContext id
+        if (existing != null && existing.status in IN_FLIGHT_STATUSES) return@withContext id
+        if (existing?.status == UrlDownloadStatus.COMPLETED.name) {
+            when (payloadProbe.probe(existing.localPath)) {
+                is MediaPayloadAvailability.Available,
+                is MediaPayloadAvailability.PermissionRequired -> return@withContext id
+                is MediaPayloadAvailability.Missing,
+                is MediaPayloadAvailability.Unreadable -> Unit // Requeue a repair download below.
+            }
         }
 
         val metadata = prefetchedMetadata ?: fetchMetadata(rawUrl)
@@ -128,21 +161,25 @@ class UrlDownloadRepository(private val context: Context) {
             id = id,
             sourceUrl = rawUrl,
             source = source.tag,
-            title = metadata?.title ?: rawUrl,
-            uploader = metadata?.uploader,
-            thumbnailUrl = metadata?.thumbnailUrl,
+            title = metadata?.title ?: existing?.title ?: rawUrl,
+            uploader = metadata?.uploader ?: existing?.uploader,
+            thumbnailUrl = metadata?.thumbnailUrl ?: existing?.thumbnailUrl,
             mediaType = mediaTag,
             localPath = null,
-            durationMs = metadata?.durationMs,
+            durationMs = metadata?.durationMs ?: existing?.durationMs,
             fileSize = null,
             status = UrlDownloadStatus.QUEUED.name,
             progressPercent = 0f,
             errorMessage = null,
             createdAtMs = System.currentTimeMillis(),
             completedAtMs = null,
-            origin = origin.name,
-            podcastId = podcastId,
-            episodePubDateMs = episodePubDateMs,
+            origin = if (existing?.origin == DownloadOrigin.MANUAL.name) {
+                DownloadOrigin.MANUAL.name
+            } else {
+                origin.name
+            },
+            podcastId = podcastId ?: existing?.podcastId,
+            episodePubDateMs = episodePubDateMs ?: existing?.episodePubDateMs,
         )
         dao.upsert(entity)
         id
@@ -180,6 +217,27 @@ class UrlDownloadRepository(private val context: Context) {
         true
     }
 
+    suspend fun repairMissing(id: String): Boolean = withContext(Dispatchers.IO) {
+        val entity = dao.getById(id) ?: return@withContext false
+        if (entity.status != UrlDownloadStatus.COMPLETED.name || entity.sourceUrl.isBlank()) {
+            return@withContext false
+        }
+        when (payloadProbe.probe(entity.localPath)) {
+            is MediaPayloadAvailability.Missing,
+            is MediaPayloadAvailability.Unreadable -> {
+                dao.resetForRetry(
+                    id = id,
+                    status = UrlDownloadStatus.QUEUED.name,
+                    progress = 0f,
+                    error = null,
+                )
+                true
+            }
+            is MediaPayloadAvailability.Available,
+            is MediaPayloadAvailability.PermissionRequired -> false
+        }
+    }
+
     suspend fun requeueInterrupted() = withContext(Dispatchers.IO) {
         dao.resetStatuses(
             fromStatuses = listOf(
@@ -193,12 +251,15 @@ class UrlDownloadRepository(private val context: Context) {
     }
 
     suspend fun markCompleted(id: String, localPath: String, fileSize: Long) {
+        val availability = payloadProbe.probe(localPath)
+        val available = availability as? MediaPayloadAvailability.Available
+            ?: throw java.io.IOException("Downloaded media is not readable: ${availability.javaClass.simpleName}")
         val entity = dao.getById(id)
         dao.markCompleted(
             id = id,
             status = UrlDownloadStatus.COMPLETED.name,
-            localPath = localPath,
-            fileSize = fileSize,
+            localPath = available.reference,
+            fileSize = available.sizeBytes ?: fileSize,
             completedAtMs = System.currentTimeMillis(),
         )
         if (entity?.origin == DownloadOrigin.AUTO.name && entity.podcastId != null) {
@@ -222,6 +283,8 @@ class UrlDownloadRepository(private val context: Context) {
         sizeBytes: Long,
         isVideo: Boolean,
     ): Boolean = withContext(Dispatchers.IO) {
+        val availability = payloadProbe.probe(uriString)
+        if (availability !is MediaPayloadAvailability.Available) return@withContext false
         val id = restoredIdFor(uriString)
         if (dao.getById(id) != null) return@withContext false
         val now = System.currentTimeMillis()
@@ -234,9 +297,9 @@ class UrlDownloadRepository(private val context: Context) {
                 uploader = null,
                 thumbnailUrl = null,
                 mediaType = if (isVideo) MediaType.VIDEO.tag else MediaType.AUDIO.tag,
-                localPath = uriString,
+                localPath = availability.reference,
                 durationMs = null,
-                fileSize = sizeBytes,
+                fileSize = availability.sizeBytes ?: sizeBytes,
                 status = UrlDownloadStatus.COMPLETED.name,
                 progressPercent = 100f,
                 errorMessage = null,
@@ -257,8 +320,9 @@ class UrlDownloadRepository(private val context: Context) {
     }
 
     private fun restoredIdFor(uriString: String): String {
+        val canonicalReference = CanonicalMediaReference.keyOf(uriString)
         val hash = java.security.MessageDigest.getInstance("MD5")
-            .digest(uriString.toByteArray())
+            .digest(canonicalReference.toByteArray())
             .joinToString("") { "%02x".format(it) }
         return "restored-$hash"
     }
@@ -353,8 +417,19 @@ class UrlDownloadRepository(private val context: Context) {
      * pipeline can play it. The synthetic `podcastId` ([SYNTHETIC_PODCAST_ID]) is
      * used to keep these grouped on the home screen and out of real podcast lookups.
      */
-    fun toEpisode(entity: UrlDownloadEntity): Episode? {
-        val path = entity.localPath ?: return null
+    fun resolve(entity: UrlDownloadEntity): ResolvedUrlDownload =
+        ResolvedUrlDownload(entity, payloadProbe.probe(entity.localPath))
+
+    fun toEpisode(entity: UrlDownloadEntity): Episode? = toEpisode(resolve(entity))
+
+    fun toEpisode(resolved: ResolvedUrlDownload): Episode? =
+        toEpisodeMetadata(resolved).takeIf {
+            resolved.availability is MediaPayloadAvailability.Available
+        }
+
+    fun toEpisodeMetadata(resolved: ResolvedUrlDownload): Episode {
+        val available = resolved.availability is MediaPayloadAvailability.Available
+        val entity = resolved.entity
         return Episode(
             id = "url:${entity.id}",
             podcastId = SYNTHETIC_PODCAST_ID,
@@ -364,8 +439,8 @@ class UrlDownloadRepository(private val context: Context) {
             audioUrl = entity.sourceUrl,
             duration = entity.durationMs,
             imageUrl = entity.thumbnailUrl,
-            isDownloaded = true,
-            localPath = path,
+            isDownloaded = available,
+            localPath = resolved.availability.reference.takeIf { available },
             mediaType = MediaType.fromTag(entity.mediaType),
         )
     }
