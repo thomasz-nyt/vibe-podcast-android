@@ -154,7 +154,22 @@ Exposed `StateFlow` values:
 **`data/repository/DownloadManager.kt`** — Downloads RSS audio into the shared
 MediaStore `Podcasts/VibePodcast` folder on Android 10+ (app-private external
 storage on older versions). Uses stable media identities for reuse/restore and
-returns `Result<String>` containing the local path or content URI.
+returns `Result<String>` containing the local path or content URI. Existing Room
+rows are resolved against present-day payload availability before they count as
+offline or short-circuit a repair download.
+
+**`data/local/CanonicalMediaReference.kt`** — JVM-safe comparison identity for
+MediaStore/file references. It treats primary-volume `external` and
+`external_primary` URI aliases as the same row while preserving collection,
+volume, and row boundaries. Never replace the original playable URI with this key.
+
+**`data/local/MediaPayloadAvailability.kt`** — Probes exact file/content references
+as Available, Missing, PermissionRequired, or Unreadable. Availability is derived
+at read time and deliberately does not add a Room column or migration.
+
+**`data/local/MediaStoreScanner.kt`** — Scans all named external volumes and returns
+explicit success, permission-required, or failed outcomes; restore/cleanup must
+not collapse scan failure into an empty result.
 
 **`data/repository/ManualDownloadRepository.kt`** — Persists explicit RSS
 download requests, enqueues unique WorkManager jobs, and reconciles the narrow
@@ -344,7 +359,7 @@ Do not treat green CI as proof of Android 8/10 storage ownership, consent, proce
 
 ## Testing
 
-JVM unit tests live under `app/src/test/` (e.g. `PodcastViewModelTest`, `PlayerViewModelTest`, `ResilientForwardingPlayerTest`, `UrlSourceTest`, `UrlValidatorTest`, `SavedPodcastsMigrationTest`). When writing tests:
+JVM unit tests live under `app/src/test/` (e.g. `PodcastViewModelTest`, `PlayerViewModelTest`, `CanonicalMediaReferenceTest`, `ResilientForwardingPlayerTest`, `UrlSourceTest`, `UrlValidatorTest`, `SavedPodcastsMigrationTest`). Android tests include Room migration and real MediaStore/payload availability coverage. When writing tests:
 
 - Unit tests for ViewModels use `MainDispatcherRule` for coroutines
 - Use `kotlinx-coroutines-test` for `TestScope`/`runTest`
