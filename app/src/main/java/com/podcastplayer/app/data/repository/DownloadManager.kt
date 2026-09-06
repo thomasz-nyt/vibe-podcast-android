@@ -9,6 +9,8 @@ import com.podcastplayer.app.data.local.DownloadedEpisodeEntity
 import com.podcastplayer.app.data.local.DownloadOrigin
 import com.podcastplayer.app.data.local.MediaIdentity
 import com.podcastplayer.app.data.local.MediaNaming
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
+import com.podcastplayer.app.data.local.MediaPayloadProbe
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.domain.model.Episode
@@ -17,7 +19,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -29,7 +34,16 @@ import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 
+data class ResolvedDownloadedEpisode(
+    val entity: DownloadedEpisodeEntity,
+    val episode: Episode,
+    val availability: MediaPayloadAvailability,
+)
+
 class DownloadManager(private val context: Context) {
+
+    private val payloadProbe = MediaPayloadProbe(context)
+    private val availabilityRefresh = MutableStateFlow(0L)
 
     private val dao: DownloadedEpisodeDao
         get() = DatabaseProvider.getDatabase(context).downloadedEpisodeDao()
@@ -53,32 +67,46 @@ class DownloadManager(private val context: Context) {
             val legacyFileName = buildHashedFileName(episode)
             val displayName = buildDisplayName(episode, podcastTitle)
 
-            // Don't re-download an episode we've already saved. We key on the DB
-            // row rather than file existence because the path may be a content://
-            // URI from MediaStore.
+            // A Room row is metadata, not proof that its payload still exists. Missing
+            // rows continue through reuse/network repair; blocked references keep their
+            // metadata and fail explicitly rather than silently creating duplicates.
             val existing = dao.getEpisodeById(episode.id)
-            if (existing != null) {
-                return@withContext Result.success(existing.localPath)
+            when (val availability = existing?.let { payloadProbe.probe(it.localPath) }) {
+                is MediaPayloadAvailability.Available ->
+                    return@withContext Result.success(availability.reference)
+                is MediaPayloadAvailability.PermissionRequired ->
+                    return@withContext Result.failure(MediaPermissionRequiredException(availability.reference))
+                is MediaPayloadAvailability.Unreadable ->
+                    return@withContext Result.failure(MediaUnreadableException(availability.reference, availability.reason))
+                is MediaPayloadAvailability.Missing, null -> Unit
             }
 
             if (MediaStoreSaver.isSupported()) {
-                // Reuse an already-on-disk copy instead of re-downloading — covers
-                // both "downloaded earlier this install" edge cases and files left
-                // behind by a previous install (visible once the user grants the
-                // media read permission; without it this quietly finds nothing).
-                val reusable = MediaStoreScanner(context).findExisting(
+                // Reuse an already-on-disk copy instead of re-downloading. Scanner failures
+                // remain distinguishable from a real miss so a provider problem never causes
+                // another download or overwrites the existing metadata row.
+                when (val reusable = MediaStoreScanner(context).findExisting(
                     isVideo = false,
                     expectedDisplayName = displayName,
-                )
-                if (reusable != null) {
-                    onProgress(1f)
-                    val entity = episode.toEntity(
-                        localPath = reusable.uriString,
-                        fileSize = reusable.sizeBytes,
-                        origin = origin,
-                    )
-                    dao.insertEpisode(entity)
-                    return@withContext Result.success(reusable.uriString)
+                )) {
+                    is MediaStoreScanner.FindExistingResult.Found -> {
+                        onProgress(1f)
+                        val entity = episode.toEntity(
+                            localPath = reusable.item.uriString,
+                            fileSize = reusable.item.sizeBytes,
+                            origin = origin,
+                        )
+                        dao.insertEpisode(entity)
+                        return@withContext Result.success(reusable.item.uriString)
+                    }
+                    is MediaStoreScanner.FindExistingResult.PermissionRequired -> {
+                        if (existing != null) {
+                            return@withContext Result.failure(MediaPermissionRequiredException(existing.localPath))
+                        }
+                    }
+                    is MediaStoreScanner.FindExistingResult.Failed ->
+                        return@withContext Result.failure(MediaScanException(reusable.message))
+                    MediaStoreScanner.FindExistingResult.NotFound -> Unit
                 }
 
                 val saved = runInterruptible {
@@ -89,19 +117,28 @@ class DownloadManager(private val context: Context) {
                     ?: return@withContext Result.failure(
                         java.io.IOException("Could not save audio to MediaStore"),
                     )
-                val entity = episode.toEntity(
-                    localPath = saved.uri.toString(),
-                    fileSize = saved.sizeBytes,
-                    origin = origin,
-                )
-                dao.insertEpisode(entity)
-                Result.success(saved.uri.toString())
+                val savedReference = saved.uri.toString()
+                when (val availability = payloadProbe.probe(savedReference)) {
+                    is MediaPayloadAvailability.Available -> {
+                        val entity = episode.toEntity(
+                            localPath = savedReference,
+                            fileSize = availability.sizeBytes ?: saved.sizeBytes,
+                            origin = origin,
+                        )
+                        dao.insertEpisode(entity)
+                        Result.success(savedReference)
+                    }
+                    else -> {
+                        MediaStoreSaver.deleteByUri(context, savedReference)
+                        Result.failure(availability.asDownloadException())
+                    }
+                }
             } else {
                 // Pre-Q: fall back to app-private external dir (existing behavior).
                 // Files won't be visible to other apps, but neither would they without
                 // the legacy WRITE_EXTERNAL_STORAGE permission flow.
                 val localFile = File(downloadDir, legacyFileName)
-                if (localFile.exists()) {
+                if (payloadProbe.probe(localFile.absolutePath) is MediaPayloadAvailability.Available) {
                     dao.insertEpisode(
                         episode.toEntity(
                             localPath = localFile.absolutePath,
@@ -115,13 +152,21 @@ class DownloadManager(private val context: Context) {
                     downloadIntoFile(episode, localFile, onProgress)
                 }
                 currentCoroutineContext().ensureActive()
-                val entity = episode.toEntity(
-                    localPath = localFile.absolutePath,
-                    fileSize = localFile.length(),
-                    origin = origin,
-                )
-                dao.insertEpisode(entity)
-                Result.success(localFile.absolutePath)
+                when (val availability = payloadProbe.probe(localFile.absolutePath)) {
+                    is MediaPayloadAvailability.Available -> {
+                        val entity = episode.toEntity(
+                            localPath = localFile.absolutePath,
+                            fileSize = availability.sizeBytes ?: localFile.length(),
+                            origin = origin,
+                        )
+                        dao.insertEpisode(entity)
+                        Result.success(localFile.absolutePath)
+                    }
+                    else -> {
+                        localFile.delete()
+                        Result.failure(availability.asDownloadException())
+                    }
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -223,28 +268,45 @@ class DownloadManager(private val context: Context) {
     private fun openWithRedirects(initialUrl: String): HttpURLConnection =
         HttpConnections.openWithRedirects(initialUrl, connectTimeoutMs = 30_000, readTimeoutMs = 30_000)
 
-    suspend fun isEpisodeDownloaded(episodeId: String): Boolean {
-        return dao.isEpisodeDownloaded(episodeId)
+    suspend fun isEpisodeDownloaded(episodeId: String): Boolean = withContext(Dispatchers.IO) {
+        dao.getEpisodeById(episodeId)?.let(::resolve)?.availability is MediaPayloadAvailability.Available
     }
 
-    suspend fun getDownloadedEpisodes(podcastId: String): List<Episode> {
-        return dao.getEpisodesByPodcast(podcastId).first().map { it.toDomain() }
-    }
-
-    fun getDownloadedEpisodesFlow(podcastId: String): Flow<List<Episode>> {
-        return dao.getEpisodesByPodcast(podcastId).map { list ->
-            list.map { it.toDomain() }
+    suspend fun getDownloadedEpisodes(podcastId: String): List<Episode> = withContext(Dispatchers.IO) {
+        dao.getEpisodesByPodcast(podcastId).first().map(::resolve).mapNotNull { resolved ->
+            resolved.episode.takeIf { resolved.availability is MediaPayloadAvailability.Available }
         }
     }
 
-    fun getAllDownloadedEpisodesFlow(): Flow<List<Episode>> {
-        return dao.getAllEpisodes().map { list ->
-            list.map { it.toDomain() }
-        }
+    fun refreshAvailability() {
+        availabilityRefresh.value += 1L
     }
 
-    /** Raw entities, useful when callers need file-size or other metadata that
-     *  the domain [Episode] doesn't carry. */
+    fun getResolvedDownloadsFlow(podcastId: String): Flow<List<ResolvedDownloadedEpisode>> =
+        combine(dao.getEpisodesByPodcast(podcastId), availabilityRefresh) { list, _ ->
+            list.map(::resolve)
+        }.flowOn(Dispatchers.IO)
+
+    fun getAllResolvedDownloadsFlow(): Flow<List<ResolvedDownloadedEpisode>> =
+        combine(dao.getAllEpisodes(), availabilityRefresh) { list, _ ->
+            list.map(::resolve)
+        }.flowOn(Dispatchers.IO)
+
+    fun getDownloadedEpisodesFlow(podcastId: String): Flow<List<Episode>> =
+        getResolvedDownloadsFlow(podcastId).map { list ->
+            list.mapNotNull { resolved ->
+                resolved.episode.takeIf { resolved.availability is MediaPayloadAvailability.Available }
+            }
+        }
+
+    fun getAllDownloadedEpisodesFlow(): Flow<List<Episode>> =
+        getAllResolvedDownloadsFlow().map { list ->
+            list.mapNotNull { resolved ->
+                resolved.episode.takeIf { resolved.availability is MediaPayloadAvailability.Available }
+            }
+        }
+
+    /** Raw entities, useful for restore, cleanup, retention, and file-size metadata. */
     fun getAllDownloadedEntitiesFlow(): Flow<List<DownloadedEpisodeEntity>> = dao.getAllEpisodes()
 
     suspend fun getAllDownloadedEntities(): List<DownloadedEpisodeEntity> = dao.getAllEpisodesOnce()
@@ -340,14 +402,17 @@ class DownloadManager(private val context: Context) {
         episode: Episode,
         localPath: String,
         fileSize: Long,
-    ): Unit = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
+        val availability = payloadProbe.probe(localPath)
+        if (availability !is MediaPayloadAvailability.Available) return@withContext false
         dao.insertEpisode(
             episode.toEntity(
                 localPath = localPath,
-                fileSize = fileSize,
+                fileSize = availability.sizeBytes ?: fileSize,
                 origin = DownloadOrigin.MANUAL,
             )
         )
+        true
     }
 
     private fun guessExtension(url: String): String? {
@@ -380,7 +445,17 @@ class DownloadManager(private val context: Context) {
         )
     }
 
-    private fun DownloadedEpisodeEntity.toDomain(): Episode {
+    private fun resolve(entity: DownloadedEpisodeEntity): ResolvedDownloadedEpisode {
+        val availability = payloadProbe.probe(entity.localPath)
+        return ResolvedDownloadedEpisode(
+            entity = entity,
+            episode = entity.toDomain(availability),
+            availability = availability,
+        )
+    }
+
+    private fun DownloadedEpisodeEntity.toDomain(availability: MediaPayloadAvailability): Episode {
+        val available = availability is MediaPayloadAvailability.Available
         return Episode(
             id = id,
             podcastId = podcastId,
@@ -390,8 +465,23 @@ class DownloadManager(private val context: Context) {
             audioUrl = audioUrl,
             duration = duration,
             imageUrl = null,
-            isDownloaded = true,
-            localPath = localPath
+            isDownloaded = available,
+            localPath = availability.reference.takeIf { available },
         )
     }
+}
+
+class MediaPermissionRequiredException(reference: String) :
+    java.io.IOException("Media access is required for $reference")
+
+class MediaUnreadableException(reference: String, reason: String?) :
+    java.io.IOException(reason?.let { "Media at $reference cannot be read: $it" } ?: "Media at $reference cannot be read")
+
+class MediaScanException(message: String) : java.io.IOException("Media scan failed: $message")
+
+private fun MediaPayloadAvailability.asDownloadException(): Exception = when (this) {
+    is MediaPayloadAvailability.PermissionRequired -> MediaPermissionRequiredException(reference)
+    is MediaPayloadAvailability.Unreadable -> MediaUnreadableException(reference, reason)
+    is MediaPayloadAvailability.Missing -> java.io.FileNotFoundException(reference)
+    is MediaPayloadAvailability.Available -> IllegalStateException("Available media cannot be an error")
 }
