@@ -129,7 +129,6 @@ class AutoDownloadWorker(
             val repository = PodcastRepository(iTunesApi.create(), RssParser())
             val downloadManager = DownloadManager(context)
             val urlDownloadRepository = UrlDownloadRepository(context)
-            val downloadedDao = DatabaseProvider.getDatabase(context).downloadedEpisodeDao()
             val retentionLimit = AppSettings.getInstance(context).autoDownloadRetentionLimit.value
             val retentionManager = AutoDownloadRetentionManager(context)
 
@@ -175,7 +174,7 @@ class AutoDownloadWorker(
                         queuedUrlDownloads = true
                         continue
                     }
-                    if (downloadedDao.isEpisodeDownloaded(episode.id)) continue
+                    if (downloadManager.isEpisodeDownloaded(episode.id)) continue
                     val withArtwork = ensureArtwork(episode, podcast)
                     // Result is ignored — periodic work; we'll try again next interval.
                     val result = downloadManager.downloadEpisode(

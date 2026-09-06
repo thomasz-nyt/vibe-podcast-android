@@ -127,3 +127,17 @@ This milestone does not add cloud sync, accounts, AI summaries, Android Auto bro
 episode-level queue editing, HTTP Range resume, a global storage quota, or a broad
 dependency/toolchain upgrade. Full episode-identity and OPML remapping migrations remain separate
 work.
+
+## 8. Implementation status
+
+- **PR 1 shipped:** milestone contract, protected CI gates, API 34 connected tests, and review evidence.
+- **PR 2 implemented:** MediaStore references compare by canonical volume/collection/row identity;
+  `external` and `external_primary` aliases for the primary volume are equivalent without rewriting the
+  playable URI. Local payload availability is derived at read time as Available, Missing, Media access
+  required, or Unreadable. Missing/unreadable files are not counted or played as offline media; RSS and
+  URL sources can repair them without deleting metadata first. Restore and duplicate cleanup surface
+  scan failures instead of reporting an empty library. No Room schema or migration is required.
+
+PR 2's automated Android coverage proves same-install primary/synthetic MediaStore aliases resolve to
+one readable asset on API 34. API 28 private-file and API 29 cross-install consent/ownership behavior
+remain explicit manual checks under the pull-request template.

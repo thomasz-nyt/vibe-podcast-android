@@ -19,11 +19,9 @@ import java.security.MessageDigest
  * shared `Podcasts/VibePodcast` and `Movies/VibePodcast` folders.
  *
  * Ownership matters here: after an uninstall/reinstall the app is a *different
- * owner* of those files. Without [requiredReadPermissions] granted, MediaStore
- * queries silently return only rows the current install contributed — which
- * makes every method below degrade gracefully: same-install dedupe keeps
- * working permission-free, and cross-install restore lights up once the user
- * grants access.
+ * owner* of those files. Same-install rows remain queryable without broad media
+ * permission. Cross-install access may require [requiredReadPermissions]; query
+ * failures are surfaced explicitly instead of being reported as an empty scan.
  */
 class MediaStoreScanner(private val context: Context) {
 
@@ -37,31 +35,60 @@ class MediaStoreScanner(private val context: Context) {
         val sizeBytes: Long,
         val dateAddedSec: Long,
         val isVideo: Boolean,
-    )
+    ) {
+        val canonicalKey: String
+            get() = CanonicalMediaReference.keyOf(uriString)
+    }
+
+    sealed interface ScanResult {
+        data class Success(val items: List<FoundMedia>) : ScanResult
+        data class PermissionRequired(val permissions: Set<String>) : ScanResult
+        data class Failed(val message: String) : ScanResult
+    }
+
+    sealed interface FindExistingResult {
+        data class Found(val item: FoundMedia) : FindExistingResult
+        data object NotFound : FindExistingResult
+        data class PermissionRequired(val permissions: Set<String>) : FindExistingResult
+        data class Failed(val message: String) : FindExistingResult
+    }
 
     fun hasReadPermission(): Boolean = requiredReadPermissions().all { permission ->
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
     /** Everything in both Vibe folders, audio and video. */
-    fun scanAll(): List<FoundMedia> = scanCollection(isVideo = false) + scanCollection(isVideo = true)
+    fun scanAll(): ScanResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return ScanResult.Success(emptyList())
+        val audio = scanCollection(isVideo = false)
+        if (audio !is ScanResult.Success) return audio
+        val video = scanCollection(isVideo = true)
+        if (video !is ScanResult.Success) return video
+        return ScanResult.Success((audio.items + video.items).distinctBy { it.canonicalKey })
+    }
 
     /**
-     * Best existing file matching [expectedDisplayName] (per [MediaNaming.matchKey]),
-     * or null. Prefers an exact name match, then un-suffixed names, then the oldest
-     * copy — so a reused link points at the original, not a "(2)" duplicate.
+     * Best existing file matching [expectedDisplayName] (per [MediaNaming.matchKey]).
+     * Prefers an exact name match, then un-suffixed names, then the oldest copy.
      */
-    fun findExisting(isVideo: Boolean, expectedDisplayName: String): FoundMedia? {
-        val expectedIdentity = MediaIdentity.parse(expectedDisplayName) ?: return null
-        return scanCollection(isVideo)
-            .filter { it.sizeBytes > 0L && MediaIdentity.parse(it.displayName) == expectedIdentity }
-            .minWithOrNull(
-                compareBy(
-                    { it.displayName != expectedDisplayName },
-                    { MediaNaming.hasDuplicateSuffix(it.displayName) },
-                    { it.dateAddedSec },
-                ),
-            )
+    fun findExisting(isVideo: Boolean, expectedDisplayName: String): FindExistingResult {
+        val expectedIdentity = MediaIdentity.parse(expectedDisplayName) ?: return FindExistingResult.NotFound
+        return when (val scan = scanCollection(isVideo)) {
+            is ScanResult.Success -> {
+                val item = scan.items
+                    .filter { it.sizeBytes > 0L && MediaIdentity.parse(it.displayName) == expectedIdentity }
+                    .minWithOrNull(
+                        compareBy(
+                            { it.displayName != expectedDisplayName },
+                            { MediaNaming.hasDuplicateSuffix(it.displayName) },
+                            { it.dateAddedSec },
+                        ),
+                    )
+                item?.let { FindExistingResult.Found(it) } ?: FindExistingResult.NotFound
+            }
+            is ScanResult.PermissionRequired -> FindExistingResult.PermissionRequired(scan.permissions)
+            is ScanResult.Failed -> FindExistingResult.Failed(scan.message)
+        }
     }
 
     /**
@@ -166,51 +193,61 @@ class MediaStoreScanner(private val context: Context) {
      */
     fun deleteDirect(uriString: String): Boolean = MediaStoreSaver.deleteByUri(context, uriString)
 
-    private fun scanCollection(isVideo: Boolean): List<FoundMedia> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return emptyList()
+    private fun scanCollection(isVideo: Boolean): ScanResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return ScanResult.Success(emptyList())
 
-        val collection = if (isVideo) {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        } else {
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        }
         val folder = if (isVideo) MediaStoreSaver.VIDEO_SUBDIR else MediaStoreSaver.AUDIO_SUBDIR
-
         val projection = arrayOf(
             MediaStore.MediaColumns._ID,
             MediaStore.MediaColumns.DISPLAY_NAME,
             MediaStore.MediaColumns.SIZE,
             MediaStore.MediaColumns.DATE_ADDED,
         )
+        val volumes = runCatching { MediaStore.getExternalVolumeNames(context) }
+            .getOrElse { error -> return scanFailure(error) }
+            .ifEmpty { setOf(MediaStore.VOLUME_EXTERNAL_PRIMARY) }
 
         val results = mutableListOf<FoundMedia>()
-        try {
-            context.contentResolver.query(
-                collection,
-                projection,
-                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-                arrayOf("$folder%"),
-                null,
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-                val dateCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    results += FoundMedia(
-                        uriString = ContentUris.withAppendedId(collection, id).toString(),
-                        displayName = cursor.getString(nameCol) ?: continue,
-                        sizeBytes = cursor.getLong(sizeCol),
-                        dateAddedSec = cursor.getLong(dateCol),
-                        isVideo = isVideo,
-                    )
-                }
+        for (volume in volumes) {
+            val collection = if (isVideo) {
+                MediaStore.Video.Media.getContentUri(volume)
+            } else {
+                MediaStore.Audio.Media.getContentUri(volume)
             }
-        } catch (_: Throwable) {
-            // Query failure (odd OEM providers) — behave as "nothing found".
+            try {
+                val cursor = context.contentResolver.query(
+                    collection,
+                    projection,
+                    "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                    arrayOf("$folder%"),
+                    null,
+                ) ?: return ScanResult.Failed("Media provider returned no cursor")
+                cursor.use {
+                    val idCol = it.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val nameCol = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                    val sizeCol = it.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                    val dateCol = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+                    while (it.moveToNext()) {
+                        val displayName = it.getString(nameCol) ?: continue
+                        results += FoundMedia(
+                            uriString = ContentUris.withAppendedId(collection, it.getLong(idCol)).toString(),
+                            displayName = displayName,
+                            sizeBytes = it.getLong(sizeCol),
+                            dateAddedSec = it.getLong(dateCol),
+                            isVideo = isVideo,
+                        )
+                    }
+                }
+            } catch (error: Throwable) {
+                return scanFailure(error)
+            }
         }
-        return results
+        return ScanResult.Success(results.distinctBy { it.canonicalKey })
+    }
+
+    private fun scanFailure(error: Throwable): ScanResult = when (error) {
+        is SecurityException -> ScanResult.PermissionRequired(requiredReadPermissions().toSet())
+        else -> ScanResult.Failed(error.message ?: error.javaClass.simpleName)
     }
 
     companion object {

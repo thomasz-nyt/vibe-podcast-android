@@ -9,6 +9,8 @@ A simple podcast player app built with Kotlin and Jetpack Compose.
 - **Media Playback**: Full-featured audio player using ExoPlayer (Media3)
 - **Offline Playback**: Download episodes for offline listening; explicit RSS
   downloads persist in Room and continue through foreground WorkManager jobs
+- **Honest Availability**: Missing or unreadable local files stay as repairable metadata instead of
+  being counted or played as valid offline media
 - **Background Play**: Foreground service with media session for background playback
 - **Player Controls**: Play/pause, seek, playback speed control
 - **Named Show Queues**: Play one newest unplayed episode from each queued show, in show order

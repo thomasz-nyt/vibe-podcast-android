@@ -32,6 +32,8 @@ import com.podcastplayer.app.BuildConfig
 import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.QueueStorage
+import com.podcastplayer.app.data.local.CanonicalMediaReference
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
 import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
@@ -480,9 +482,13 @@ fun PodcastNavHost(
                 composable(Routes.Downloads) {
                     val scope = rememberCoroutineScope()
                     val podcastDownloads by podcastViewModel.downloadedEpisodesUi.collectAsState()
-                    val urlDownloads by urlDownloadViewModel.completedDownloads.collectAsState()
+                    val urlDownloads by urlDownloadViewModel.resolvedCompletedDownloads.collectAsState()
                     val failedUrlDownloads by urlDownloadViewModel.needsAttentionDownloads.collectAsState()
                     val restoreState by podcastViewModel.restoreState.collectAsState()
+                    LaunchedEffect(Unit) {
+                        podcastViewModel.refreshDownloadAvailability()
+                        urlDownloadViewModel.refreshDownloadAvailability()
+                    }
                     var maintenanceMessage by remember { mutableStateOf<String?>(null) }
                     var duplicatePlan by remember {
                         mutableStateOf<com.podcastplayer.app.data.local.DuplicateCleanupPlan?>(null)
@@ -514,9 +520,20 @@ fun PodcastNavHost(
 
                     fun reportActualDeletion(targetUris: List<String>) {
                         scope.launch {
-                            val remaining = mediaScanner.scanAll().mapTo(hashSetOf()) { it.uriString }
-                            val actual = targetUris.count { it !in remaining }
-                            maintenanceMessage = "Removed $actual file" + if (actual == 1) "." else "s."
+                            when (val scan = mediaScanner.scanAll()) {
+                                is MediaStoreScanner.ScanResult.Success -> {
+                                    val remaining = scan.items.mapTo(hashSetOf()) { it.canonicalKey }
+                                    val actual = targetUris.count {
+                                        CanonicalMediaReference.keyOf(it) !in remaining
+                                    }
+                                    maintenanceMessage = "Removed $actual file" +
+                                        if (actual == 1) "." else "s."
+                                }
+                                is MediaStoreScanner.ScanResult.PermissionRequired ->
+                                    maintenanceMessage = "Media access is required to verify deletion."
+                                is MediaStoreScanner.ScanResult.Failed ->
+                                    maintenanceMessage = "Could not verify deletion: ${scan.message}"
+                            }
                         }
                     }
 
@@ -578,12 +595,17 @@ fun PodcastNavHost(
 
                     fun startCleanup() {
                         scope.launch {
-                            val plan = podcastViewModel.planDuplicateCleanup()
-                            if (plan.confirmed.isEmpty() && plan.ambiguous.isEmpty()) {
-                                maintenanceMessage = "No duplicate files found."
-                            } else {
-                                duplicatePlan = plan
-                            }
+                            runCatching { podcastViewModel.planDuplicateCleanup() }
+                                .onSuccess { plan ->
+                                    if (plan.confirmed.isEmpty() && plan.ambiguous.isEmpty()) {
+                                        maintenanceMessage = "No duplicate files found."
+                                    } else {
+                                        duplicatePlan = plan
+                                    }
+                                }
+                                .onFailure { error ->
+                                    maintenanceMessage = error.message ?: "Could not inspect duplicate files."
+                                }
                         }
                     }
 
@@ -740,12 +762,18 @@ fun PodcastNavHost(
                                         subtitle = item.podcastTitle,
                                         artworkUrl = item.episode.imageUrl ?: item.podcastArtworkUrl,
                                         episode = item.episode,
-                                        sizeBytes = sizeById[item.episode.id] ?: 0L,
+                                        availability = item.availability,
+                                        canRepair = item.episode.audioUrl.isNotBlank(),
+                                        sizeBytes = if (item.availability is MediaPayloadAvailability.Available) {
+                                            sizeById[item.episode.id] ?: 0L
+                                        } else {
+                                            0L
+                                        },
                                     ),
                                 )
                             }
-                            urlDownloads.forEach { entity ->
-                                val episode = urlRepository.toEpisode(entity) ?: return@forEach
+                            urlDownloads.forEach { resolved ->
+                                val entity = resolved.entity
                                 add(
                                     DownloadEntryUi(
                                         id = "url:${entity.id}",
@@ -755,8 +783,14 @@ fun PodcastNavHost(
                                         title = entity.title,
                                         subtitle = entity.uploader ?: entity.source.uppercase(),
                                         artworkUrl = entity.thumbnailUrl,
-                                        episode = episode,
-                                        sizeBytes = entity.fileSize ?: 0L,
+                                        episode = urlRepository.toEpisodeMetadata(resolved),
+                                        availability = resolved.availability,
+                                        canRepair = entity.sourceUrl.isNotBlank(),
+                                        sizeBytes = if (resolved.availability is MediaPayloadAvailability.Available) {
+                                            entity.fileSize ?: 0L
+                                        } else {
+                                            0L
+                                        },
                                     ),
                                 )
                             }
@@ -769,8 +803,10 @@ fun PodcastNavHost(
                         failedUrlDownloads = failedUrlDownloads,
                         totalBytes = totalBytes,
                         onPlay = { entry ->
-                            playerViewModel.playEpisode(entry.episode, entry.artworkUrl)
-                            navController.navigate(Routes.Player)
+                            if (entry.availability is MediaPayloadAvailability.Available) {
+                                playerViewModel.playEpisode(entry.episode, entry.artworkUrl)
+                                navController.navigate(Routes.Player)
+                            }
                         },
                         onDelete = { entry ->
                             scope.launch {
@@ -785,6 +821,20 @@ fun PodcastNavHost(
                                         podcastViewModel.deleteUrlDownload(entry.id.removePrefix("url:"))
                                 }
                                 requestConsentDelete(consent)
+                            }
+                        },
+                        onRepair = { entry ->
+                            when (entry.kind) {
+                                DownloadEntryUi.Kind.PODCAST -> podcastViewModel.startDownload(entry.episode)
+                                DownloadEntryUi.Kind.URL_AUDIO,
+                                DownloadEntryUi.Kind.URL_VIDEO ->
+                                    urlDownloadViewModel.repairMissingDownload(entry.id.removePrefix("url:"))
+                            }
+                        },
+                        onGrantMediaAccess = {
+                            withMediaPermission {
+                                podcastViewModel.refreshDownloadAvailability()
+                                urlDownloadViewModel.refreshDownloadAvailability()
                             }
                         },
                         onRetryUrlDownload = { id -> urlDownloadViewModel.retryDownload(id) },

@@ -122,6 +122,10 @@ Ranked by user-visible impact.
 
 ### Corrections (bugs in shipped features)
 
+- **[RESOLVED IN MILESTONE PR 2] Download availability and MediaStore aliases.** Room rows are no
+  longer accepted as proof of readable offline media. Primary-volume `external`/`external_primary`
+  aliases share one canonical comparison identity for restore and duplicate protection; missing or
+  unreadable payloads remain repairable metadata and are not counted or played as offline media.
 - **[RESOLVED] Play Queue: latest-episode-per-podcast is the intended behavior.** An earlier pass read
   spec 004 literally ("all unplayed episodes, oldest→newest") and rewrote the builder from
   `maxByOrNull { pubDate }` (single newest unplayed per podcast) to `sortedBy { pubDate }` over all
