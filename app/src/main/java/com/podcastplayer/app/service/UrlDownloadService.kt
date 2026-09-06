@@ -16,6 +16,8 @@ import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.PodcastApplication
 import com.podcastplayer.app.data.local.MediaNaming
 import com.podcastplayer.app.data.local.MediaIdentity
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
+import com.podcastplayer.app.data.local.MediaPayloadProbe
 import com.podcastplayer.app.data.local.MediaStoreSaver
 import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
@@ -179,9 +181,19 @@ class UrlDownloadService : Service() {
                 .findExisting(isVideo = requestedType == MediaType.VIDEO, expectedDisplayName = expectedName)
             ) {
                 is MediaStoreScanner.FindExistingResult.Found -> {
-                    repository.markCompleted(id, reusable.item.uriString, reusable.item.sizeBytes)
-                    updateNotification(buildCompletedNotification(entity.title))
-                    return
+                    when (MediaPayloadProbe(applicationContext).probe(reusable.item.uriString)) {
+                        is MediaPayloadAvailability.Available -> {
+                            repository.markCompleted(id, reusable.item.uriString, reusable.item.sizeBytes)
+                            updateNotification(buildCompletedNotification(entity.title))
+                            return
+                        }
+                        is MediaPayloadAvailability.PermissionRequired -> {
+                            repository.markFailed(id, "Media access is required to reuse the existing file.")
+                            return
+                        }
+                        is MediaPayloadAvailability.Missing,
+                        is MediaPayloadAvailability.Unreadable -> Unit
+                    }
                 }
                 is MediaStoreScanner.FindExistingResult.Failed -> {
                     repository.markFailed(id, "Could not inspect existing media: ${reusable.message}")
