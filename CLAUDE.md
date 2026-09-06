@@ -351,7 +351,7 @@ kapt("androidx.room:room-compiler:X.Y.Z")
 - Runs independent jobs for JVM unit tests, Android lint, and debug + release assembly so one failure does not hide the other gates
 - Runs connected instrumentation tests on an API 34 x86_64 emulator
 - Uploads unit-test, lint, and connected-test reports after success or failure unless the run is cancelled
-- Uploads both debug and unsigned release APKs after successful assembly
+- Uploads only the installable debug APK; the unsigned release APK is assembled for R8 verification but is not retained as an artifact
 
 Do not treat green CI as proof of Android 8/10 storage ownership, consent, process-death, Bluetooth, or layout behavior. Storage and migration PRs must document the applicable API 28/29/34 checks prompted by `.github/pull_request_template.md`.
 
