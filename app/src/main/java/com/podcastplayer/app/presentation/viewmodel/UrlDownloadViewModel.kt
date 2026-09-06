@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.podcastplayer.app.data.local.UrlDownloadEntity
+import com.podcastplayer.app.data.repository.ResolvedUrlDownload
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.data.repository.UrlDownloadStatus
 import com.podcastplayer.app.data.repository.UrlMetadata
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -42,9 +44,19 @@ class UrlDownloadViewModel(application: Application) : AndroidViewModel(applicat
     private val _selectedMediaType = MutableStateFlow(MediaType.AUDIO)
     val selectedMediaType: StateFlow<MediaType> = _selectedMediaType.asStateFlow()
 
-    /** All completed URL downloads, newest first — fed to the home screen. */
+    /** Completed transfer rows resolved against their present-day local payload. */
+    val resolvedCompletedDownloads: StateFlow<List<ResolvedUrlDownload>> =
+        repository.observeResolvedCompleted().stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = emptyList(),
+        )
+
+    /** Available completed URL downloads, newest first — fed to Home. */
     val completedDownloads: StateFlow<List<UrlDownloadEntity>> =
-        repository.observeCompleted().stateIn(
+        resolvedCompletedDownloads.map { list ->
+            list.mapNotNull { resolved -> repository.toEpisode(resolved)?.let { resolved.entity } }
+        }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
             initialValue = emptyList(),
@@ -130,8 +142,21 @@ class UrlDownloadViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun repairMissingDownload(id: String) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            if (repository.repairMissing(id)) {
+                UrlDownloadService.startPump(app)
+            }
+        }
+    }
+
     fun cancelDownload(id: String) {
         UrlDownloadService.cancel(getApplication(), id)
+    }
+
+    fun refreshDownloadAvailability() {
+        repository.refreshAvailability()
     }
 
     fun resetPreview() {
