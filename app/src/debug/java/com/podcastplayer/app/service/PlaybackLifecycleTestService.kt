@@ -12,7 +12,9 @@ class PlaybackLifecycleTestService : MediaSessionService() {
         super.onCreate()
         instance = this
         creations++
-        session = MediaSession.Builder(this, ExoPlayer.Builder(this).build()).build()
+        session = MediaSession.Builder(this, ExoPlayer.Builder(this).build())
+            .setId("playback-lifecycle-test")
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
