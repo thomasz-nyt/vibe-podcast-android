@@ -39,9 +39,10 @@ class PlaybackRecoveryInstrumentedTest {
                 controller.beginPlaybackRequest(1)
                 controller.prepareEpisodes(listOf(episode("first", media), episode("second", media)), null, 1)
                 controller.setPlaybackSpeed(1.5f)
-                controller.seekTo(2_000)
             }
             waitFor { controller.snapshot().playbackState == Player.STATE_READY }
+            withContext(Dispatchers.Main) { controller.seekTo(2_000) }
+            waitFor { controller.snapshot().currentPosition >= 2_000 }
             val old = withContext(Dispatchers.Main) { controller.awaitController() }
             val count = PlaybackLifecycleTestService.creations
             withContext(Dispatchers.Main) {
