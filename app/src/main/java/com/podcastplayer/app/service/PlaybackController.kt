@@ -26,6 +26,7 @@ interface PlaybackController {
     suspend fun prepareEpisode(episode: Episode, artworkUrl: String?, requestId: Long): Long?
     suspend fun prepareEpisodes(episodes: List<Episode>, defaultArtworkUrl: String?, requestId: Long): Long?
     suspend fun play(requestId: Long? = null)
+    suspend fun recover(requestId: Long) { play(requestId) }
     suspend fun pause()
     suspend fun seekTo(position: Long)
     suspend fun skipToPrevious()

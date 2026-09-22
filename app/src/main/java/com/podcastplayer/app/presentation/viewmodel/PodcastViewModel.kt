@@ -3,47 +3,49 @@ package com.podcastplayer.app.presentation.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.podcastplayer.app.data.local.CanonicalMediaReference
-import com.podcastplayer.app.data.local.MediaNaming
-import com.podcastplayer.app.data.local.MediaIdentity
-import com.podcastplayer.app.data.local.MediaPayloadAvailability
-import com.podcastplayer.app.data.local.MediaFileCandidate
-import com.podcastplayer.app.data.local.MediaStoreScanner
-import com.podcastplayer.app.data.local.ManualDownloadEntity
-import com.podcastplayer.app.data.local.ManualDownloadStatus
-import com.podcastplayer.app.data.local.RestoreEpisodeCandidate
-import com.podcastplayer.app.data.local.RestorePlanner
 import com.podcastplayer.app.data.local.DuplicateCleanupPlan
 import com.podcastplayer.app.data.local.DuplicateCleanupPlanner
+import com.podcastplayer.app.data.local.ManualDownloadEntity
+import com.podcastplayer.app.data.local.ManualDownloadStatus
+import com.podcastplayer.app.data.local.MediaFileCandidate
+import com.podcastplayer.app.data.local.MediaIdentity
+import com.podcastplayer.app.data.local.MediaNaming
+import com.podcastplayer.app.data.local.MediaPayloadAvailability
+import com.podcastplayer.app.data.local.MediaStoreScanner
 import com.podcastplayer.app.data.local.OpmlExportSummary
 import com.podcastplayer.app.data.local.OpmlImportData
 import com.podcastplayer.app.data.local.OpmlManager
 import com.podcastplayer.app.data.local.PlaybackProgressDao
 import com.podcastplayer.app.data.local.PlaybackProgressEntity
 import com.podcastplayer.app.data.local.QueueStorage
+import com.podcastplayer.app.data.local.RestoreEpisodeCandidate
+import com.podcastplayer.app.data.local.RestorePlanner
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.ManualDownloadRepository
-import com.podcastplayer.app.data.repository.ResolvedDownloadedEpisode
 import com.podcastplayer.app.data.repository.PodcastRepository
+import com.podcastplayer.app.data.repository.QueuePlaybackBuilder
+import com.podcastplayer.app.data.repository.QueuePlaybackResult
+import com.podcastplayer.app.data.repository.ResolvedDownloadedEpisode
 import com.podcastplayer.app.data.repository.UrlDownloadRepository
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.domain.model.PodcastQueue
 import java.io.InputStream
 import java.io.OutputStream
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -213,15 +215,26 @@ class PodcastViewModel(
         observeQueues()
     }
 
+    val downloadRequests = manualDownloadRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun retryDownload(requestId: String) {
+        viewModelScope.launch { manualDownloadRepository.retry(requestId) }
+    }
+
+    fun dismissDownload(requestId: String) {
+        viewModelScope.launch { manualDownloadRepository.remove(requestId) }
+    }
+
+    fun checkDownloadsNow() = manualDownloadRepository.scheduleScan()
+
     private fun observeManualDownloads() {
         viewModelScope.launch {
             manualDownloadRepository.observeAll().collect { requests ->
                 val snapshot = buildManualDownloadUiSnapshot(requests)
                 _downloadProgress.value = snapshot.progressByEpisodeId
-                snapshot.failureMessage?.let { _downloadError.value = it }
-                snapshot.failedRequestIds.forEach { requestId ->
-                    manualDownloadRepository.remove(requestId)
-                }
+                _downloadError.value = snapshot.failureMessage
+
             }
         }
     }
@@ -613,11 +626,17 @@ class PodcastViewModel(
     }
 
     fun setPodcastAutoDownload(podcastId: String, enabled: Boolean) {
-        viewModelScope.launch { savedPodcastsStorage.setAutoDownload(podcastId, enabled) }
+        viewModelScope.launch {
+            savedPodcastsStorage.setAutoDownload(podcastId, enabled)
+            if (enabled) manualDownloadRepository.scheduleScan()
+        }
     }
 
     fun setQueueAutoDownload(queueId: String, enabled: Boolean) {
-        viewModelScope.launch { queueStorage.setAutoDownload(queueId, enabled) }
+        viewModelScope.launch {
+            queueStorage.setAutoDownload(queueId, enabled)
+            if (enabled) manualDownloadRepository.scheduleScan()
+        }
     }
 
     fun moveSavedPodcast(fromIndex: Int, toIndex: Int) {
@@ -647,6 +666,9 @@ class PodcastViewModel(
         viewModelScope.launch {
             savedPodcastsStorage.save(podcast)
             queueStorage.addPodcast(queueId, podcast.id)
+            if (queueStorage.queues.value.any { it.id == queueId && it.autoDownload }) {
+                manualDownloadRepository.scheduleScan()
+            }
         }
     }
 
@@ -662,6 +684,9 @@ class PodcastViewModel(
         viewModelScope.launch {
             savedPodcastsStorage.save(podcast)
             queueStorage.setPodcastQueues(podcast.id, queueIds)
+            if (queueStorage.queues.value.any { it.id in queueIds && it.autoDownload }) {
+                manualDownloadRepository.scheduleScan()
+            }
         }
     }
 
@@ -747,13 +772,16 @@ class PodcastViewModel(
      * Per-podcast feed fetches run concurrently (independent network calls), bounded by
      * [MAX_CONCURRENT_QUEUE_FEED_FETCHES].
      */
-    suspend fun buildUnplayedEpisodesForPodcastQueue(podcasts: List<Podcast>): List<Episode> {
-        return buildUnplayedEpisodesForQueue(
-            podcasts = podcasts,
-            fetchEpisodes = { feedUrl, podcastId -> repository.getEpisodes(feedUrl, podcastId) },
-            fetchProgress = { podcastId -> playbackProgressDao.getByPodcastId(podcastId) },
-        )
-    }
+    suspend fun buildUnplayedEpisodesForPodcastQueue(
+        podcasts: List<Podcast>,
+    ): QueuePlaybackResult =
+        QueuePlaybackBuilder(
+            fetch = { feed, id -> repository.getEpisodes(feed, id, forceRefresh = true) },
+            saved = { feed, id -> repository.savedFeed(feed, id) },
+            progress = { id -> playbackProgressDao.getByPodcastId(id) },
+            downloads = { id -> downloadManager.getDownloadedEpisodes(id) },
+            online = { manualDownloadRepository.isOnline() },
+        ).build(podcasts)
 
     override fun onCleared() {
         downloadsJob?.cancel()

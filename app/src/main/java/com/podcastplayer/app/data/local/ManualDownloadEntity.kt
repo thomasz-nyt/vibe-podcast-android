@@ -1,5 +1,6 @@
 package com.podcastplayer.app.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -38,6 +39,8 @@ data class ManualDownloadEntity(
     val progressPercent: Float = 0f,
     val errorMessage: String? = null,
     val createdAtMs: Long,
+    @ColumnInfo(defaultValue = "'MANUAL'")
+    val origin: String = DownloadOrigin.MANUAL.name,
 )
 
 fun ManualDownloadEntity.toEpisode(): Episode = Episode(

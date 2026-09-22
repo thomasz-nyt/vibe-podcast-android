@@ -12,12 +12,16 @@ import com.podcastplayer.app.service.PlaybackController
 import com.podcastplayer.app.service.PlaybackControllerListener
 import com.podcastplayer.app.service.PlaybackSessionStorage
 import com.podcastplayer.app.util.Logger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 class PlayerViewModel(
     private val playerController: PlaybackController,
@@ -42,6 +46,13 @@ class PlayerViewModel(
 
     private var sleepTimerJob: Job? = null
     private var positionTickerJob: Job? = null
+    private var requestJob: Job? = null
+    private var bufferingJob: Job? = null
+    private var recoveryUsed = false
+    private var terminalError = false
+    private val initialized = CompletableDeferred<Unit>()
+    suspend fun awaitInitialization() = initialized.await()
+    val playbackGeneration: Long get() = requestGeneration
     private var requestGeneration = 0L
     private var pendingRequestId: Long? = null
     private var queueEpisodes: Map<String, Episode> = emptyMap()
@@ -51,126 +62,151 @@ class PlayerViewModel(
 
     init {
         viewModelScope.launch {
+            val generation = 0L
             try {
                 playerController.addListener(controllerListener)
-                playerController.restoreLastSessionIfNeeded()
-                applySnapshot(playerController.snapshot())
+                if (generation == requestGeneration) playerController.restoreLastSessionIfNeeded()
+                if (generation == requestGeneration) applySnapshot(playerController.snapshot())
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
-                Logger.e("Unable to connect playback controller", error)
-                _playerState.value = _playerState.value.copy(
-                    state = PlaybackState.ERROR,
-                    playRequested = false,
-                    isBuffering = false,
-                    playbackError = error.message ?: "Unable to connect to player",
-                )
+                if (generation == requestGeneration) fail(error)
+            } finally {
+                initialized.complete(Unit)
             }
         }
+    }
+
+    /** Reserve before feed IO so a slow queue cannot override any newer user action. */
+    fun reservePlaybackRequest(): Long {
+        requestJob?.cancel()
+        bufferingJob?.cancel()
+        pendingRequestId = null
+        terminalError = false
+        recoveryUsed = false
+        val id = ++requestGeneration
+        playerController.beginPlaybackRequest(id)
+        return id
     }
 
     fun playEpisode(episode: Episode, artworkUrl: String?) {
         queueEpisodes = emptyMap()
         queueDefaultArtworkUrl = null
-        startEpisodeRequest(episode, artworkUrl) { requestId ->
-            playerController.prepareEpisode(episode, artworkUrl, requestId)
-        }
-    }
-
-    fun playEpisodesQueue(episodes: List<Episode>, defaultArtworkUrl: String?) {
-        if (episodes.isEmpty()) return
-        queueEpisodes = episodes.associateBy(Episode::id)
-        queueDefaultArtworkUrl = defaultArtworkUrl
-        val first = episodes.first()
-        startEpisodeRequest(first, defaultArtworkUrl) { requestId ->
-            playerController.prepareEpisodes(episodes, defaultArtworkUrl, requestId)
-        }
-    }
-
-    private fun startEpisodeRequest(
-        episode: Episode,
-        artworkUrl: String?,
-        prepare: suspend (Long) -> Long?,
-    ) {
-        val requestId = ++requestGeneration
-        pendingRequestId = requestId
-        playerController.beginPlaybackRequest(requestId)
+        val id = reservePlaybackRequest()
         updateCurrentEpisode(episode, artworkUrl)
-        _playerState.value = _playerState.value.copy(
-            state = PlaybackState.LOADING,
-            currentEpisode = episode,
-            playRequested = true,
-            isBuffering = true,
-            playbackError = null,
-        )
-        viewModelScope.launch {
-            try {
-                val startMs = prepare(requestId) ?: return@launch
-                if (requestId != requestGeneration) return@launch
+        launchRequest(id) {
+            val start = playerController.prepareEpisode(episode, artworkUrl, id)
+            if (id == requestGeneration && start != null) {
                 applyDefaultSpeedIfNeeded()
-                if (requestId != requestGeneration) return@launch
-                playerController.play(requestId)
-                pendingRequestId = null
-                if (startMs > 0L) _resumedFromMs.value = startMs
-                applySnapshot(playerController.snapshot())
-            } catch (error: Exception) {
-                if (requestId != requestGeneration) return@launch
-                pendingRequestId = null
-                Logger.e("Playback request failed", error)
-                _playerState.value = _playerState.value.copy(
-                    state = PlaybackState.ERROR,
-                    playRequested = false,
-                    isBuffering = false,
-                    playbackError = error.message ?: "Playback failed",
-                )
+                if (id == requestGeneration) playerController.play(id)
+                if (start > 0) _resumedFromMs.value = start
             }
         }
     }
 
+    fun playEpisodesQueue(
+        episodes: List<Episode>,
+        defaultArtworkUrl: String?,
+        requestId: Long = reservePlaybackRequest(),
+    ) {
+        if (requestId != requestGeneration || episodes.isEmpty()) return
+        queueEpisodes = episodes.associateBy(Episode::id)
+        queueDefaultArtworkUrl = defaultArtworkUrl
+        updateCurrentEpisode(episodes.first(), defaultArtworkUrl)
+        launchRequest(requestId) {
+            val start = playerController.prepareEpisodes(episodes, defaultArtworkUrl, requestId)
+            if (requestId == requestGeneration && start != null) {
+                applyDefaultSpeedIfNeeded()
+                if (requestId == requestGeneration) playerController.play(requestId)
+                if (start > 0) _resumedFromMs.value = start
+            }
+        }
+    }
+
+    private fun launchRequest(id: Long, action: suspend () -> Unit) {
+        pendingRequestId = id
+        _playerState.value = _playerState.value.copy(
+            state = PlaybackState.LOADING, currentEpisode = _currentEpisode.value,
+            playRequested = true, isBuffering = true, playbackError = null,
+        )
+        requestJob = viewModelScope.launch {
+            try {
+                try {
+                    withTimeout(30_000) { action() }
+                } catch (error: Exception) {
+                    if (error is CancellationException && error !is TimeoutCancellationException) throw error
+                    if (id != requestGeneration || recoveryUsed) throw error
+                    recoveryUsed = true
+                    withTimeout(30_000) { action() }
+                }
+                if (id != requestGeneration) return@launch
+                pendingRequestId = null
+                applySnapshot(playerController.snapshot())
+            } catch (error: CancellationException) {
+                if (error is TimeoutCancellationException && id == requestGeneration) fail(error)
+                else throw error
+            } catch (error: Exception) {
+                if (id == requestGeneration) fail(error)
+            } finally {
+                if (pendingRequestId == id) pendingRequestId = null
+            }
+        }
+    }
+
+    private fun fail(error: Throwable) {
+        terminalError = true
+        pendingRequestId = null
+        bufferingJob?.cancel()
+        positionTickerJob?.cancel()
+        Logger.e("Playback request failed", error)
+        _playerState.value = _playerState.value.copy(
+            state = PlaybackState.ERROR, playRequested = false, isBuffering = false,
+            playbackError = "${error.message ?: "Playback unavailable"}. Tap Retry or choose another episode.",
+        )
+        val failedGeneration = requestGeneration
+        viewModelScope.launch {
+            if (failedGeneration == requestGeneration) runCatching { playerController.pause() }
+        }
+    }
+
+    private fun watchBuffering() {
+        if (bufferingJob?.isActive == true) return
+        val id = requestGeneration
+        bufferingJob = viewModelScope.launch {
+            delay(30_000)
+            if (id == requestGeneration) recoverOrFail(id, IllegalStateException("Playback timed out"))
+        }
+    }
+
+    private fun recoverOrFail(id: Long, error: Throwable) {
+        if (id != requestGeneration || terminalError) return
+        bufferingJob?.cancel()
+        bufferingJob = null
+        if (recoveryUsed) { fail(error); return }
+        recoveryUsed = true
+        launchRequest(id) { playerController.recover(id) }
+    }
+
     private suspend fun applyDefaultSpeedIfNeeded() {
         val speed = appSettings?.defaultPlaybackSpeed?.value ?: return
-        if (kotlin.math.abs(speed - 1f) < 0.01f) return
         playerController.setPlaybackSpeed(speed)
     }
 
     fun consumeResumeNotice() { _resumedFromMs.value = null }
 
     fun togglePlayPause() {
-        if (_playerState.value.playRequested) {
-            val cancellationId = ++requestGeneration
-            pendingRequestId = null
-            playerController.beginPlaybackRequest(cancellationId)
+        val wasRequested = _playerState.value.playRequested
+        val hadError = terminalError || _playerState.value.playbackError != null
+        val id = reservePlaybackRequest()
+        if (wasRequested) {
             _playerState.value = _playerState.value.copy(
                 state = if (_currentEpisode.value == null) PlaybackState.IDLE else PlaybackState.PAUSED,
-                playRequested = false,
-                isBuffering = false,
-                playbackError = null,
+                playRequested = false, isBuffering = false, playbackError = null,
             )
-            viewModelScope.launch {
-                runCatching { playerController.pause() }
-                    .onFailure { Logger.e("Pause failed", it) }
-            }
-            return
-        }
-
-        val requestId = ++requestGeneration
-        playerController.beginPlaybackRequest(requestId)
-        _playerState.value = _playerState.value.copy(
-            state = PlaybackState.LOADING,
-            playRequested = true,
-            isBuffering = true,
-            playbackError = null,
-        )
-        viewModelScope.launch {
-            try {
-                playerController.play(requestId)
-                applySnapshot(playerController.snapshot())
-            } catch (error: Exception) {
-                Logger.e("Play failed", error)
-                _playerState.value = _playerState.value.copy(
-                    state = PlaybackState.ERROR,
-                    playRequested = false,
-                    isBuffering = false,
-                    playbackError = error.message ?: "Playback failed",
-                )
+            viewModelScope.launch { runCatching { playerController.pause() }.onFailure { fail(it) } }
+        } else {
+            launchRequest(id) {
+                if (hadError) playerController.recover(id) else playerController.play(id)
             }
         }
     }
@@ -180,17 +216,14 @@ class PlayerViewModel(
 
     private fun navigateQueue(next: Boolean) {
         if (next && !_hasNext.value || !next && !_hasPrevious.value) return
-        val requestId = ++requestGeneration
-        playerController.beginPlaybackRequest(requestId)
-        _playerState.value = _playerState.value.copy(
-            state = PlaybackState.LOADING,
-            playRequested = true,
-            isBuffering = true,
-            playbackError = null,
-        )
-        viewModelScope.launch {
-            if (next) playerController.skipToNext() else playerController.skipToPrevious()
-            playerController.play(requestId)
+        val id = reservePlaybackRequest()
+        var navigated = false
+        launchRequest(id) {
+            if (!navigated) {
+                if (next) playerController.skipToNext() else playerController.skipToPrevious()
+                navigated = true
+            }
+            if (id == requestGeneration) playerController.play(id)
         }
     }
 
@@ -214,7 +247,7 @@ class PlayerViewModel(
                 remaining -= 1_000
                 _sleepTimerRemaining.value = remaining.coerceAtLeast(0)
             }
-            playerController.pause()
+            if (_playerState.value.playRequested) togglePlayPause()
             _sleepTimerRemaining.value = null
         }
     }
@@ -226,7 +259,7 @@ class PlayerViewModel(
     }
 
     private fun applySnapshot(snapshot: ControllerSnapshot) {
-        if (pendingRequestId != null) return
+        if (pendingRequestId != null || terminalError) return
         val previous = _currentEpisode.value
         val rebuilt = snapshot.currentEpisode
         val episode = when {
@@ -240,7 +273,8 @@ class PlayerViewModel(
         _hasPrevious.value = snapshot.hasPrevious
         _hasNext.value = snapshot.hasNext
 
-        val buffering = snapshot.playWhenReady && snapshot.playbackState == Player.STATE_BUFFERING
+        val buffering = snapshot.playbackError == null &&
+            snapshot.playWhenReady && snapshot.playbackState == Player.STATE_BUFFERING
         val state = when {
             snapshot.playbackError != null -> PlaybackState.ERROR
             episode == null -> PlaybackState.IDLE
@@ -254,10 +288,20 @@ class PlayerViewModel(
             currentPosition = snapshot.currentPosition,
             duration = snapshot.duration,
             playbackSpeed = snapshot.playbackSpeed,
-            playRequested = snapshot.playWhenReady && snapshot.playbackState != Player.STATE_ENDED,
+            playRequested = snapshot.playbackError == null && snapshot.playWhenReady &&
+                snapshot.playbackState != Player.STATE_ENDED,
             isBuffering = buffering,
             playbackError = snapshot.playbackError,
         )
+        if (snapshot.playbackError != null && snapshot.playWhenReady &&
+            requestGeneration > 0 && _currentEpisode.value != null) {
+            recoverOrFail(requestGeneration, IllegalStateException(snapshot.playbackError))
+        } else if (buffering) {
+            watchBuffering()
+        } else {
+            bufferingJob?.cancel()
+            bufferingJob = null
+        }
         updatePositionTicker(snapshot.playWhenReady && snapshot.playbackState != Player.STATE_ENDED)
     }
 
@@ -284,9 +328,7 @@ class PlayerViewModel(
     }
 
     fun clearPlayer() {
-        val requestId = ++requestGeneration
-        pendingRequestId = null
-        playerController.beginPlaybackRequest(requestId)
+        reservePlaybackRequest()
         positionTickerJob?.cancel()
         viewModelScope.launch {
             playerController.stop()
@@ -302,6 +344,8 @@ class PlayerViewModel(
 
     override fun onCleared() {
         sleepTimerJob?.cancel()
+        requestJob?.cancel()
+        bufferingJob?.cancel()
         positionTickerJob?.cancel()
         playerController.removeListener(controllerListener)
         super.onCleared()

@@ -45,13 +45,16 @@ class AutoDownloadRetentionManager(private val context: Context) {
         }
 
     private suspend fun candidates(podcastId: String, limit: Int): List<RetentionCandidate> {
+        val protectedIds = PlaybackSessionStorage(context).load()?.let { session ->
+            session.items.drop(session.currentIndex).mapTo(hashSetOf()) { it.mediaId }
+        }.orEmpty() + PlaybackDownloadProtection.episodeIds
         val rss = database.downloadedEpisodeDao().getAutoEpisodesByPodcast(podcastId).map {
             RetentionCandidate(
                 id = it.id,
                 podcastId = it.podcastId,
                 publicationTimeMs = it.pubDate,
                 completedTimeMs = it.downloadDate,
-                isPinned = it.origin != DownloadOrigin.AUTO.name,
+                isPinned = it.origin != DownloadOrigin.AUTO.name || it.id in protectedIds,
                 source = RetentionCandidate.Source.RSS,
             )
         }

@@ -13,9 +13,9 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-import androidx.media3.session.DefaultMediaNotificationProvider
 import com.podcastplayer.app.MainActivity
 import com.podcastplayer.app.R
 import com.podcastplayer.app.data.local.DatabaseProvider
@@ -124,6 +124,21 @@ class PlayerService : MediaSessionService() {
                     newPosition: Player.PositionInfo,
                     reason: Int
                 ) {
+                    if (oldPosition.mediaItem?.mediaId != newPosition.mediaItem?.mediaId) {
+                        oldPosition.mediaItem?.let { outgoing ->
+                            val now = System.currentTimeMillis()
+                            val completed = reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION
+                            serviceScope.launch(sessionWriteDispatcher) {
+                                playbackProgressDao.upsert(PlaybackProgressEntity(
+                                    episodeId = outgoing.mediaId,
+                                    podcastId = outgoing.mediaMetadata.artist?.toString().orEmpty(),
+                                    positionMs = oldPosition.positionMs.coerceAtLeast(0),
+                                    durationMs = if (completed) oldPosition.positionMs.coerceAtLeast(0) else 0,
+                                    completed = completed, lastPlayedAtMs = now, updatedAtMs = now,
+                                ))
+                            }
+                        }
+                    }
                     // e.g. user scrubs; record sooner.
                     persistProgress(markCompleted = false)
                     persistPlaybackSession(isCompleted = false)
@@ -182,6 +197,7 @@ class PlayerService : MediaSessionService() {
                 artist = item.mediaMetadata.artist?.toString(),
                 description = item.mediaMetadata.description?.toString(),
                 artworkUri = item.mediaMetadata.artworkUri?.toString(),
+                originalUrl = item.mediaMetadata.extras?.getString(PlayerController.EXTRA_ORIGINAL_URL),
             )
         }
         return PlaybackSessionSnapshot(
@@ -218,9 +234,7 @@ class PlayerService : MediaSessionService() {
         val durationMs = p.duration.coerceAtLeast(0)
 
         // If duration is unknown, avoid persisting nonsense completion.
-        val shouldComplete = markCompleted || (
-            durationMs > 0 && positionMs >= (durationMs - 2_000)
-        )
+        val shouldComplete = markCompleted
 
         val now = System.currentTimeMillis()
         val entity = PlaybackProgressEntity(
@@ -233,8 +247,9 @@ class PlayerService : MediaSessionService() {
             updatedAtMs = now
         )
 
-        serviceScope.launch(Dispatchers.IO) {
-            playbackProgressDao.upsert(entity)
+        serviceScope.launch(sessionWriteDispatcher) {
+            val existing = playbackProgressDao.getByEpisodeId(episodeId)
+            playbackProgressDao.upsert(if (existing?.completed == true) entity.copy(completed = true) else entity)
         }
     }
 

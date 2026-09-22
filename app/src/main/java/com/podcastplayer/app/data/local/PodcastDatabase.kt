@@ -11,8 +11,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaybackProgressEntity::class,
         UrlDownloadEntity::class,
         ManualDownloadEntity::class,
+        FeedSnapshotEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class PodcastDatabase : RoomDatabase() {
@@ -21,7 +22,20 @@ abstract class PodcastDatabase : RoomDatabase() {
     abstract fun urlDownloadDao(): UrlDownloadDao
     abstract fun manualDownloadDao(): ManualDownloadDao
 
+    abstract fun feedSnapshotDao(): FeedSnapshotDao
+
     companion object {
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE manual_downloads ADD COLUMN origin TEXT NOT NULL DEFAULT 'MANUAL'")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS feed_snapshots (podcastId TEXT NOT NULL, " +
+                        "feedUrl TEXT NOT NULL, fetchedAtMs INTEGER NOT NULL, episodesJson TEXT NOT NULL, " +
+                        "PRIMARY KEY(podcastId, feedUrl))",
+                )
+            }
+        }
+
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(

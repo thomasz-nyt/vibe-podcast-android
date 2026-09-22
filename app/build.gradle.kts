@@ -58,6 +58,10 @@ android {
         jvmTarget = "17"
     }
 
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+
+    testOptions { unitTests.isReturnDefaultValues = true }
+
     buildFeatures {
         compose = true
         // Generate BuildConfig so we can surface versionName etc. in the UI.
@@ -127,6 +131,7 @@ dependencies {
     testImplementation("net.sf.kxml:kxml2:2.3.0")
 
     androidTestImplementation("androidx.test:core:1.5.0")
+    androidTestImplementation("androidx.work:work-testing:2.9.0")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
 

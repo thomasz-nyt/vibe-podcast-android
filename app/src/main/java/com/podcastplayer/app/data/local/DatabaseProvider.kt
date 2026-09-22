@@ -21,6 +21,7 @@ object DatabaseProvider {
                     PodcastDatabase.MIGRATION_2_3,
                     PodcastDatabase.MIGRATION_3_4,
                     PodcastDatabase.MIGRATION_4_5,
+                    PodcastDatabase.MIGRATION_5_6,
                 )
                 .build()
                 .also { instance = it }

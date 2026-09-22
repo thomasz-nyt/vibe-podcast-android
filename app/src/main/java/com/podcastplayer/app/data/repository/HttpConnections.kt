@@ -58,7 +58,7 @@ internal object HttpConnections {
             }
             if (code !in 200..299) {
                 conn.disconnect()
-                throw IOException("HTTP $code from $url")
+                throw HttpStatusException(code, url.toString())
             }
             return conn
         }

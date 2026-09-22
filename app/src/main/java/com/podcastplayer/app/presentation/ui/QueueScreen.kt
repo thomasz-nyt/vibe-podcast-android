@@ -26,9 +26,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.QueueMusic
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.podcastplayer.app.data.local.ManualDownloadEntity
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlayerState
 import com.podcastplayer.app.domain.model.Podcast
@@ -56,8 +57,8 @@ import com.podcastplayer.app.domain.model.PodcastQueue
 import com.podcastplayer.app.ui.theme.JetBrainsMono
 import org.burnoutcrew.reorderable.ReorderableItem
 import org.burnoutcrew.reorderable.detectReorderAfterLongPress
-import org.burnoutcrew.reorderable.reorderable
 import org.burnoutcrew.reorderable.rememberReorderableLazyListState
+import org.burnoutcrew.reorderable.reorderable
 
 @Composable
 fun QueueScreen(
@@ -79,6 +80,11 @@ fun QueueScreen(
     onPlayQueue: () -> Unit,
     onDismissPlayer: () -> Unit,
     onToggleAutoDownload: (String, Boolean) -> Unit = { _, _ -> },
+    downloadStatus: String = "",
+    downloadFailures: List<ManualDownloadEntity> = emptyList(),
+    onCheckDownloads: () -> Unit = {},
+    onRetryDownload: (String) -> Unit = {},
+    onDismissDownload: (String) -> Unit = {},
     @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
 ) {
     val listState = rememberLazyListState()
@@ -156,6 +162,25 @@ fun QueueScreen(
                             )
                         },
                     )
+                }
+            }
+
+            if (selectedQueue?.autoDownload == true || downloadFailures.isNotEmpty()) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Text(downloadStatus, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onCheckDownloads) { Text("Check now") }
+                    LazyColumn(Modifier.heightIn(max = 160.dp)) {
+                        items(downloadFailures, key = { it.requestId }) { request ->
+                            Column {
+                                Text("${request.title}: ${request.errorMessage ?: "Download failed"}",
+                                    style = MaterialTheme.typography.bodySmall)
+                                Row {
+                                    TextButton(onClick = { onRetryDownload(request.requestId) }) { Text("Retry") }
+                                    TextButton(onClick = { onDismissDownload(request.requestId) }) { Text("Dismiss") }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
