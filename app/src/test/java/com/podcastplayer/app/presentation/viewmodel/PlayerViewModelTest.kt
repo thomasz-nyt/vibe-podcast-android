@@ -2,13 +2,18 @@ package com.podcastplayer.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModelStore
 import androidx.media3.common.Player
+import com.podcastplayer.app.data.local.FeedSnapshot
+import com.podcastplayer.app.data.repository.QueuePlaybackBuilder
+import com.podcastplayer.app.data.repository.QueuePlaybackResult
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlaybackState
+import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.service.ControllerSnapshot
 import com.podcastplayer.app.service.PlaybackController
 import com.podcastplayer.app.service.PlaybackControllerListener
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -194,6 +199,89 @@ class PlayerViewModelTest {
         viewModel.playEpisodesQueue(listOf(episode("stale")), null, queueRequest)
         assertEquals("chosen", viewModel.currentEpisode.value?.id)
         assertFalse(controller.prepares.containsKey("stale"))
+    }
+
+    @Test
+    fun reopeningWithLoadingSessionAndStalledFeedStartsSavedDownload() = runPlayerTest {
+        val controller = FakePlaybackController()
+        val viewModel = model(controller)
+        runCurrent()
+        controller.emit(snapshot(episode("restored"), Player.STATE_BUFFERING, playWhenReady = true))
+        val selected = episode("morning")
+        val downloaded = selected.copy(isDownloaded = true, localPath = "/download/morning")
+        val show = Podcast("podcast", "Show", "Artist", null, "https://example.com/feed")
+        var fetchCancelled = false
+        viewModel.startQueuePlayback(
+            null,
+            resolve = {
+                QueuePlaybackBuilder(
+                    fetch = { _, _ -> try { awaitCancellation() } finally { fetchCancelled = true } },
+                    saved = { _, _ -> FeedSnapshot(listOf(selected), 123L) },
+                    progress = { emptyList() }, downloads = { listOf(downloaded) },
+                ).build(listOf(show))
+            },
+            onResult = {}, onFailure = { error(it) },
+        )
+        runCurrent()
+        advanceTimeBy(8_001)
+        runCurrent()
+        assertTrue(fetchCancelled)
+        assertEquals("morning", viewModel.currentEpisode.value?.id)
+        controller.prepares.getValue("morning").complete(0L)
+        runCurrent()
+        assertEquals(PlaybackState.PLAYING, viewModel.playerState.value.state)
+        assertFalse(viewModel.playerState.value.isBuffering)
+    }
+
+    @Test
+    fun emptyQueueAndResolutionTimeoutSettleLoading() = runPlayerTest {
+        val controller = FakePlaybackController()
+        val viewModel = model(controller)
+        runCurrent()
+        viewModel.startQueuePlayback(null, { QueuePlaybackResult(emptyList()) }, {}, {})
+        runCurrent()
+        assertEquals(PlaybackState.ERROR, viewModel.playerState.value.state)
+        viewModel.startQueuePlayback(null, { awaitCancellation() }, {}, {})
+        runCurrent()
+        advanceTimeBy(12_001)
+        runCurrent()
+        assertEquals(PlaybackState.ERROR, viewModel.playerState.value.state)
+        assertFalse(viewModel.playerState.value.isBuffering)
+    }
+
+    @Test
+    fun newerEpisodeSelectionCancelsQueueResolution() = runPlayerTest {
+        val controller = FakePlaybackController()
+        val viewModel = model(controller)
+        runCurrent()
+        var cancelled = false
+        viewModel.startQueuePlayback(null, {
+            try { awaitCancellation() } finally { cancelled = true }
+        }, {}, {})
+        runCurrent()
+        viewModel.playEpisode(episode("chosen"), null)
+        runCurrent()
+        controller.prepares.getValue("chosen").complete(0L)
+        runCurrent()
+        assertTrue(cancelled)
+        assertEquals("chosen", viewModel.currentEpisode.value?.id)
+        assertEquals(PlaybackState.PLAYING, viewModel.playerState.value.state)
+    }
+
+    @Test
+    fun queueThatNeverBecomesReadyShowsError() = runPlayerTest {
+        val controller = FakePlaybackController().apply { stayBuffering = true }
+        val viewModel = model(controller)
+        runCurrent()
+        viewModel.playEpisodesQueue(listOf(episode("queued")), null)
+        runCurrent()
+        controller.prepares.getValue("queued").complete(0L)
+        runCurrent()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(PlaybackState.ERROR, viewModel.playerState.value.state)
+        assertFalse(viewModel.playerState.value.isBuffering)
+        assertTrue(viewModel.playerState.value.playbackError!!.contains("Retry"))
     }
 
     @Test

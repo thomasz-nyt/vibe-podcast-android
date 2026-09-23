@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
 import com.podcastplayer.app.data.local.AppSettings
+import com.podcastplayer.app.data.repository.QueuePlaybackResult
 import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.PlayerState
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+
+private const val QUEUE_LOG_TAG = "VibeQueue"
 
 class PlayerViewModel(
     private val playerController: PlaybackController,
@@ -89,6 +92,50 @@ class PlayerViewModel(
         return id
     }
 
+    /** Feed resolution and playback belong to one request, so a newer action cancels both. */
+    fun startQueuePlayback(
+        defaultArtworkUrl: String?,
+        resolve: suspend () -> QueuePlaybackResult,
+        onResult: (QueuePlaybackResult) -> Unit,
+        onFailure: (String) -> Unit,
+    ) {
+        val id = reservePlaybackRequest()
+        pendingRequestId = id
+        _playerState.value = _playerState.value.copy(
+            state = PlaybackState.LOADING, playRequested = true, isBuffering = true, playbackError = null,
+        )
+        Logger.d("Queue request $id: resolving feeds", tag = QUEUE_LOG_TAG)
+        requestJob = viewModelScope.launch {
+            try {
+                val result = withTimeout(12_000) { resolve() }
+                if (id != requestGeneration) return@launch
+                Logger.d("Queue request $id: resolved ${result.episodes.size} episodes, " +
+                    "${result.shows.count { it.episode == null }} unavailable shows", tag = QUEUE_LOG_TAG)
+                onResult(result)
+                if (result.episodes.isEmpty()) {
+                    fail(IllegalStateException("Queue has no playable episodes"))
+                } else {
+                    playEpisodesQueue(result.episodes, defaultArtworkUrl, id)
+                }
+            } catch (error: CancellationException) {
+                if (error is TimeoutCancellationException && id == requestGeneration) {
+                    Logger.w("Queue request $id: resolution timed out", tag = QUEUE_LOG_TAG)
+                    fail(IllegalStateException("Queue resolution timed out after 12 seconds"))
+                    onFailure("Queue resolution timed out. Check your connection or saved downloads.")
+                } else {
+                    Logger.d("Queue request $id: superseded", tag = QUEUE_LOG_TAG)
+                    throw error
+                }
+            } catch (error: Exception) {
+                if (id == requestGeneration) {
+                    Logger.w("Queue request $id: resolution failed", tag = QUEUE_LOG_TAG)
+                    fail(IllegalStateException("Queue could not be loaded"))
+                    onFailure("Queue could not be loaded. Retry or check your connection.")
+                }
+            }
+        }
+    }
+
     fun playEpisode(episode: Episode, artworkUrl: String?) {
         queueEpisodes = emptyMap()
         queueDefaultArtworkUrl = null
@@ -116,11 +163,34 @@ class PlayerViewModel(
         launchRequest(requestId) {
             val start = playerController.prepareEpisodes(episodes, defaultArtworkUrl, requestId)
             if (requestId == requestGeneration && start != null) {
+                Logger.d("Queue request $requestId: prepared first item", tag = QUEUE_LOG_TAG)
                 applyDefaultSpeedIfNeeded()
                 if (requestId == requestGeneration) playerController.play(requestId)
                 if (start > 0) _resumedFromMs.value = start
+                awaitQueueReady(requestId, episodes.first().id)
+            } else if (requestId == requestGeneration) {
+                error("Queue preparation was interrupted")
             }
         }
+    }
+
+    private suspend fun awaitQueueReady(requestId: Long, firstEpisodeId: String) {
+        val ready = kotlinx.coroutines.withTimeoutOrNull(15_000) {
+            while (requestId == requestGeneration) {
+                val snapshot = playerController.snapshot()
+                snapshot.playbackError?.let { error("Queue playback failed: $it") }
+                if (snapshot.currentEpisode?.id == firstEpisodeId &&
+                    snapshot.playbackState == Player.STATE_READY && snapshot.playWhenReady
+                ) return@withTimeoutOrNull true
+                delay(100)
+            }
+            false
+        }
+        if (requestId == requestGeneration && ready != true) {
+            Logger.w("Queue request $requestId: first item did not become ready", tag = QUEUE_LOG_TAG)
+            error("First queue episode did not become ready")
+        }
+        if (ready == true) Logger.d("Queue request $requestId: first item ready", tag = QUEUE_LOG_TAG)
     }
 
     private fun launchRequest(id: Long, action: suspend () -> Unit) {

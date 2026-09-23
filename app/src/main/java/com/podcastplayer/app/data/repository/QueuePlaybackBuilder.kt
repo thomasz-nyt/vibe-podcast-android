@@ -10,6 +10,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class QueueShowResult(
     val podcastId: String,
@@ -33,15 +34,19 @@ class QueuePlaybackBuilder(
 ) {
     suspend fun build(podcasts: List<Podcast>): QueuePlaybackResult = coroutineScope {
         val slots = Semaphore(4)
-        QueuePlaybackResult(podcasts.map { podcast -> async { slots.withPermit { buildShow(podcast) } } }.awaitAll())
+        QueuePlaybackResult(podcasts.map { podcast -> async { buildShow(podcast, slots) } }.awaitAll())
     }
 
-    private suspend fun buildShow(podcast: Podcast): QueueShowResult {
+    private suspend fun buildShow(podcast: Podcast, slots: Semaphore): QueueShowResult {
         fun unavailable(message: String, cachedAtMs: Long? = null) =
             QueueShowResult(podcast.id, podcast.title, cachedAtMs = cachedAtMs, message = message)
         val feed = podcast.feedUrl ?: return unavailable("No feed URL")
         return try {
-            val fresh = if (online()) fetch(feed, podcast.id) else Result.failure(Exception("Offline"))
+            val fresh = if (online()) {
+                withTimeoutOrNull(FEED_REFRESH_LIMIT_MS) {
+                    slots.withPermit { fetch(feed, podcast.id) }
+                } ?: Result.failure(Exception("Feed refresh timed out"))
+            } else Result.failure(Exception("Offline"))
             fresh.exceptionOrNull()?.let { if (it is CancellationException) throw it }
             val cache = if (fresh.isFailure) saved(feed, podcast.id) else null
             val failure = fresh.exceptionOrNull()?.message ?: "Feed unavailable"
@@ -74,5 +79,9 @@ class QueuePlaybackBuilder(
         } catch (error: Exception) {
             unavailable(error.message ?: "Show unavailable")
         }
+    }
+
+    private companion object {
+        const val FEED_REFRESH_LIMIT_MS = 8_000L
     }
 }

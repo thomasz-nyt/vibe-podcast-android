@@ -138,15 +138,33 @@ fun PodcastNavHost(
     val contentResolver = context.contentResolver
     val opmlScope = rememberCoroutineScope()
     var queueResult by remember { mutableStateOf<QueuePlaybackResult?>(null) }
+    var queueError by remember { mutableStateOf<String?>(null) }
 
-    suspend fun playQueue(podcasts: List<Podcast>, requestId: Long) {
-        val result = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
-        if (requestId != playerViewModel.playbackGeneration) return
-        queueResult = result.takeIf { it.episodes.isEmpty() || it.shows.any { show -> show.message != null } }
-        if (result.episodes.isNotEmpty()) {
-            playerViewModel.playEpisodesQueue(result.episodes, podcasts.firstOrNull()?.artworkUrl, requestId)
-            navController.navigate(Routes.Player)
-        }
+    fun playQueue(podcasts: List<Podcast>) {
+        queueResult = null
+        queueError = null
+        playerViewModel.startQueuePlayback(
+            defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl,
+            resolve = { podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts) },
+            onResult = { result ->
+                queueResult = result.takeIf { it.episodes.isEmpty() || it.shows.any { show -> show.message != null } }
+                if (result.episodes.isNotEmpty()) navController.navigate(Routes.Player)
+            },
+            onFailure = { queueError = it },
+        )
+    }
+
+    queueError?.let { message ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { queueError = null },
+            title = { androidx.compose.material3.Text("Queue unavailable") },
+            text = { androidx.compose.material3.Text(message) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { queueError = null }) {
+                    androidx.compose.material3.Text("OK")
+                }
+            },
+        )
     }
 
     queueResult?.let { result ->
@@ -208,9 +226,9 @@ fun PodcastNavHost(
         playerViewModel.awaitInitialization()
         if (generation != playerViewModel.playbackGeneration || generation != 0L) return@LaunchedEffect
 
-        // Only skip auto-play if something is actively playing/loading (not paused/restored).
+        // A restored loading session may be stalled; Morning owns startup unless playback is active.
         val playbackState = playerViewModel.playerState.value.state
-        if (playbackState == PlaybackState.PLAYING || playbackState == PlaybackState.LOADING) return@LaunchedEffect
+        if (playbackState == PlaybackState.PLAYING) return@LaunchedEffect
 
         // Find "Morning" queue and resolve its podcasts.
         val morningPayload = queueStorage.queues.value
@@ -221,8 +239,7 @@ fun PodcastNavHost(
         val podcasts = morningPayload.podcastIds.mapNotNull { savedMap[it] }
         if (podcasts.isEmpty()) return@LaunchedEffect
 
-        val requestId = playerViewModel.reservePlaybackRequest()
-        playQueue(podcasts, requestId)
+        playQueue(podcasts)
     }
 
     // React to a Share intent (issue #33). MainActivity hands us the URL via [sharedUrl];
@@ -393,7 +410,6 @@ fun PodcastNavHost(
                 }
 
                 composable(Routes.Search) {
-                    val scope = rememberCoroutineScope()
                     val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
 
                     PodcastListScreen(
@@ -409,8 +425,7 @@ fun PodcastNavHost(
                         onPlayQueue = {
                             val podcasts = selectedQueuePodcasts
                             if (podcasts.isNotEmpty()) {
-                                val requestId = playerViewModel.reservePlaybackRequest()
-                                scope.launch { playQueue(podcasts, requestId) }
+                                playQueue(podcasts)
                             }
                         },
                         onAddFromUrl = { rawUrl ->
@@ -465,7 +480,6 @@ fun PodcastNavHost(
                     )
                     val requests by podcastViewModel.downloadRequests.collectAsState()
 
-                    val scope = rememberCoroutineScope()
                     val queues by podcastViewModel.queues.collectAsState()
                     val selectedQueueId by podcastViewModel.selectedQueueId.collectAsState()
                     val queuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
@@ -495,8 +509,7 @@ fun PodcastNavHost(
                         },
                         onPlayQueue = {
                             if (queuePodcasts.isNotEmpty()) {
-                                val requestId = playerViewModel.reservePlaybackRequest()
-                                scope.launch { playQueue(queuePodcasts, requestId) }
+                                playQueue(queuePodcasts)
                             }
                         },
                         onDismissPlayer = { playerViewModel.clearPlayer() },

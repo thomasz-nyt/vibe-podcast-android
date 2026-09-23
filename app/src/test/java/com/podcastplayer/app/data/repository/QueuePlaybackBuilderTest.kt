@@ -5,6 +5,11 @@ import com.podcastplayer.app.domain.model.Episode
 import com.podcastplayer.app.domain.model.Podcast
 import java.util.Date
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,6 +17,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class QueuePlaybackBuilderTest {
     private fun episode(id: String, time: Long = 2L) = Episode(
         id, "show", id, null, Date(time), "https://example.com/$id.mp3", null,
@@ -38,6 +44,54 @@ class QueuePlaybackBuilderTest {
         assertEquals(local(newest), result.episodes.single())
         assertEquals(123L, result.shows.single().cachedAtMs)
         assertTrue(result.shows.single().message!!.contains("Offline"))
+    }
+
+    @Test fun stalledRefreshUsesExactSavedDownloadWithinSharedDeadline() = runTest {
+        var cancelled = false
+        val job = backgroundScope.launch {
+            val result = QueuePlaybackBuilder(
+                fetch = { _, _ -> try { awaitCancellation() } finally { cancelled = true } },
+                saved = { _, _ -> FeedSnapshot(listOf(newest, old), 123L) },
+                progress = { emptyList() }, downloads = { listOf(local(newest)) },
+            ).build(listOf(show))
+            assertEquals(local(newest), result.episodes.single())
+        }
+        runCurrent()
+        advanceTimeBy(8_001)
+        runCurrent()
+        assertTrue(job.isCompleted)
+        assertTrue(cancelled)
+    }
+
+    @Test fun timedOutRefreshWithoutSnapshotReportsUnavailable() = runTest {
+        val result = QueuePlaybackBuilder(
+            fetch = { _, _ -> awaitCancellation() }, saved = { _, _ -> null },
+            progress = { emptyList() }, downloads = { listOf(local(old)) },
+        ).build(listOf(show))
+        assertTrue(result.episodes.isEmpty())
+        assertTrue(result.shows.single().message!!.contains("no saved snapshot"))
+    }
+
+    @Test fun timedOutRefreshNeverSubstitutesOlderDownload() = runTest {
+        val result = QueuePlaybackBuilder(
+            fetch = { _, _ -> awaitCancellation() },
+            saved = { _, _ -> FeedSnapshot(listOf(newest, old), 123L) },
+            progress = { emptyList() }, downloads = { listOf(local(old)) },
+        ).build(listOf(show))
+        assertTrue(result.episodes.isEmpty())
+        assertTrue(result.shows.single().message!!.contains("newest unfinished episode"))
+    }
+
+    @Test fun oneStalledShowDoesNotDiscardQuickFreshResult() = runTest {
+        val shows = listOf(show.copy(id = "quick"), show.copy(id = "stalled"))
+        val result = QueuePlaybackBuilder(
+            fetch = { _, id -> if (id == "stalled") awaitCancellation()
+                else Result.success(listOf(newest.copy(podcastId = id))) },
+            saved = { _, _ -> null }, progress = { emptyList() }, downloads = { emptyList() },
+        ).build(shows)
+        assertEquals(listOf("quick", "stalled"), result.shows.map { it.podcastId })
+        assertEquals("quick", result.episodes.single().podcastId)
+        assertNotNull(result.shows.last().message)
     }
 
     @Test fun failedRefreshNeverSubstitutesOlderDownloadedEpisode() = runTest {
