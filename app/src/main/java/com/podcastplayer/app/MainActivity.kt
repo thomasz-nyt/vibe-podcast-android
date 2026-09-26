@@ -6,8 +6,6 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -17,6 +15,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.podcastplayer.app.data.local.AppSettings
 import com.podcastplayer.app.data.repository.UrlValidator
 import com.podcastplayer.app.presentation.ui.PodcastNavHost
@@ -53,6 +53,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        com.podcastplayer.app.service.AutoDownloadWorker.enqueueIfStale(this)
     }
 
     override fun onNewIntent(intent: Intent) {

@@ -1,5 +1,6 @@
 package com.podcastplayer.app.data.repository
 
+import com.podcastplayer.app.data.local.FeedSnapshotStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
 import com.podcastplayer.app.data.remote.upgradeITunesArtwork
@@ -11,7 +12,13 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser: RssParser) {
+class PodcastRepository(
+    private val iTunesApi: iTunesApi,
+    private val rssParser: RssParser,
+    private val snapshots: FeedSnapshotStorage? = null,
+) {
+    suspend fun savedFeed(feedUrl: String, podcastId: String) = snapshots?.load(podcastId, feedUrl)
+
 
     private val episodesCache = TtlCache<String, List<Episode>>()
     private val podcastFeedCache = TtlCache<String, Podcast>()
@@ -26,6 +33,8 @@ class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser:
                 } else {
                     Result.failure(Exception("Failed to search podcasts: ${response.code()}"))
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -45,7 +54,7 @@ class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser:
     ): Result<List<Episode>> {
         return withContext(Dispatchers.IO) {
             if (!forceRefresh) {
-                episodesCache.get(feedUrl, CACHE_TTL_MS)?.let { return@withContext Result.success(it) }
+                episodesCache.get("$podcastId:$feedUrl", CACHE_TTL_MS)?.let { return@withContext Result.success(it) }
             }
             try {
                 val connection = HttpConnections.openWithRedirects(
@@ -56,12 +65,15 @@ class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser:
                 try {
                     connection.inputStream.use { inputStream ->
                         val episodes = rssParser.parseEpisodes(inputStream, podcastId)
-                        episodesCache.put(feedUrl, episodes)
+                        snapshots?.save(podcastId, feedUrl, episodes, System.currentTimeMillis())
+                        episodesCache.put("$podcastId:$feedUrl", episodes)
                         Result.success(episodes)
                     }
                 } finally {
                     connection.disconnect()
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Result.failure(e)
             }
@@ -94,6 +106,8 @@ class PodcastRepository(private val iTunesApi: iTunesApi, private val rssParser:
                 } finally {
                     connection.disconnect()
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Result.failure(e)
             }

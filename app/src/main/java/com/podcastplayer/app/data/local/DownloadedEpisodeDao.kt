@@ -36,6 +36,9 @@ interface DownloadedEpisodeDao {
     @Query("SELECT EXISTS(SELECT 1 FROM downloaded_episodes WHERE id = :episodeId)")
     suspend fun isEpisodeDownloaded(episodeId: String): Boolean
 
+    @Query("UPDATE downloaded_episodes SET origin = 'MANUAL' WHERE id = :episodeId")
+    suspend fun pin(episodeId: String)
+
     @Query("DELETE FROM downloaded_episodes")
     suspend fun deleteAll()
 }

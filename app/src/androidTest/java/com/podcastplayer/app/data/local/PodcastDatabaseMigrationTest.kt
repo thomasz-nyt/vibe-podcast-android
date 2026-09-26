@@ -4,15 +4,58 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
-import kotlinx.coroutines.runBlocking
 
 @RunWith(AndroidJUnit4::class)
 class PodcastDatabaseMigrationTest {
     private val databaseName = "migration-test"
+
+    @Test
+    fun migration5To6PreservesRequestsDownloadsAndProgress() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "migration-five-six"
+        context.deleteDatabase(name)
+        val schemaText = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("com.podcastplayer.app.data.local.PodcastDatabase/5.json").bufferedReader().use { it.readText() }
+        val schema = org.json.JSONObject(schemaText).getJSONObject("database").getJSONArray("entities")
+        context.openOrCreateDatabase(name, Context.MODE_PRIVATE, null).use { db ->
+            for (i in 0 until schema.length()) {
+                val entity = schema.getJSONObject(i)
+                val table = entity.getString("tableName")
+                db.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                val indices = entity.getJSONArray("indices")
+                for (j in 0 until indices.length()) {
+                    db.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
+                }
+            }
+            db.execSQL("INSERT INTO manual_downloads VALUES " +
+                "('stable-worker-request','pending','show','Show','Pending',NULL,100,'https://audio',200," +
+                "'RUNNING',42,NULL,123)")
+            db.execSQL("INSERT INTO downloaded_episodes VALUES " +
+                "('done','show','Done',NULL,100,'https://done',200,'/saved',10,20,'MANUAL')")
+            db.execSQL("INSERT INTO playback_progress VALUES ('pending','show',1234,5000,0,100,100)")
+            db.version = 5
+        }
+        val db = Room.databaseBuilder(context, PodcastDatabase::class.java, name)
+            .addMigrations(PodcastDatabase.MIGRATION_5_6).build()
+        try {
+            val request = db.manualDownloadDao().getByEpisodeId("pending")!!
+            assertEquals("stable-worker-request", request.requestId)
+            assertEquals("RUNNING", request.status)
+            assertEquals(42f, request.progressPercent)
+            assertEquals("MANUAL", request.origin)
+            assertEquals("/saved", db.downloadedEpisodeDao().getEpisodeById("done")!!.localPath)
+            assertEquals(1234L, db.playbackProgressDao().getByEpisodeId("pending")!!.positionMs)
+            assertNull(db.feedSnapshotDao().get("show", "https://feed"))
+        } finally {
+            db.close()
+            context.deleteDatabase(name)
+        }
+    }
 
     @Test
     fun migration3To5PinsExistingRowsAndCreatesManualDownloadQueue() = runBlocking {
@@ -86,6 +129,7 @@ class PodcastDatabaseMigrationTest {
             .addMigrations(
                 PodcastDatabase.MIGRATION_3_4,
                 PodcastDatabase.MIGRATION_4_5,
+                PodcastDatabase.MIGRATION_5_6,
             )
             .build()
 

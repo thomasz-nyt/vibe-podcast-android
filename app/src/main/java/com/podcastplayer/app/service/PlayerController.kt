@@ -9,7 +9,6 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
-import androidx.core.content.ContextCompat
 import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.MediaPayloadAvailability
 import com.podcastplayer.app.data.local.MediaPayloadProbe
@@ -21,10 +20,45 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.withContext
 
-class PlayerController private constructor(private val context: Context) : PlaybackController {
+class PlayerController internal constructor(
+    private val context: Context,
+    private val sessionToken: SessionToken = SessionToken(context, ComponentName(context, PlayerService::class.java)),
+) : PlaybackController {
+    private val connection = ReconnectableConnection(
+        connect = {
+            val future = MediaController.Builder(context, sessionToken)
+                .setListener(object : MediaController.Listener {
+                    override fun onDisconnected(controller: MediaController) {
+                        this@PlayerController.onDisconnected(controller)
+                    }
+                }).buildAsync()
+            try {
+                future.await().also { controller ->
+                    listeners.keys.forEach { attachListener(controller, it) }
+                }
+            } catch (error: Exception) {
+                MediaController.releaseFuture(future)
+                throw error
+            }
+        },
+        isConnected = { controller: MediaController -> controller.isConnected },
+        release = { controller -> controller.release() },
+    )
+    val connectedController get() = connection.state
+    private var lastSnapshot: ControllerSnapshot? = null
+    private var recoveryItems: List<MediaItem> = emptyList()
+    private var recoveryIndex = 0
+    private var recoveryPosition = 0L
+    private var recoverySpeed = 1f
 
-    private val sessionToken = SessionToken(context, ComponentName(context, PlayerService::class.java))
-    private val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
+    private fun onDisconnected(controller: MediaController) {
+        if (connection.state.value !== controller) return
+        connection.invalidate(controller)
+        val snapshot = lastSnapshot ?: return
+        listeners.keys.forEach { listener ->
+            listener.onSnapshotChanged(snapshot.copy(playbackError = "Player disconnected"))
+        }
+    }
     private val playbackSessionStorage = PlaybackSessionStorage(context)
     private val payloadProbe = MediaPayloadProbe(context)
     private val playbackProgressDao by lazy { DatabaseProvider.getDatabase(context).playbackProgressDao() }
@@ -41,7 +75,10 @@ class PlayerController private constructor(private val context: Context) : Playb
     private suspend fun episodeToMediaItem(episode: Episode, artworkUrl: String?): MediaItem {
         // Stash the already-known media type in the metadata extras so reading it back
         // in mediaItemToEpisode() is a free field read instead of a contentResolver IPC.
-        val extras = Bundle().apply { putString(EXTRA_MEDIA_TYPE, episode.mediaType.tag) }
+        val extras = Bundle().apply {
+            putString(EXTRA_MEDIA_TYPE, episode.mediaType.tag)
+            putString(EXTRA_ORIGINAL_URL, episode.audioUrl)
+        }
         val metadata = MediaMetadata.Builder()
             .setTitle(episode.title)
             .setArtist(episode.podcastId)
@@ -81,11 +118,15 @@ class PlayerController private constructor(private val context: Context) : Playb
     }
 
     override suspend fun prepareEpisode(episode: Episode, artworkUrl: String?, requestId: Long): Long? {
+        if (requestId != latestPlaybackRequest) return null
+        PlaybackDownloadProtection.episodeIds = setOf(episode.id)
         val startMs = resumePositionFor(episode.id) ?: 0L
         if (requestId != latestPlaybackRequest) return null
-        val controller = controllerFuture.await()
+        val controller = awaitController()
         if (requestId != latestPlaybackRequest) return null
-        controller.setMediaItem(episodeToMediaItem(episode, artworkUrl), startMs)
+        val item = episodeToMediaItem(episode, artworkUrl)
+        if (requestId != latestPlaybackRequest) return null
+        controller.setMediaItem(item, startMs)
         controller.prepare()
         return startMs
     }
@@ -95,13 +136,14 @@ class PlayerController private constructor(private val context: Context) : Playb
         defaultArtworkUrl: String?,
         requestId: Long,
     ): Long? {
-        if (episodes.isEmpty()) return null
+        if (episodes.isEmpty() || requestId != latestPlaybackRequest) return null
+        PlaybackDownloadProtection.episodeIds = episodes.mapTo(hashSetOf()) { it.id }
         val startMs = resumePositionFor(episodes.first().id) ?: 0L
         if (requestId != latestPlaybackRequest) return null
         val items = episodes.map { episode ->
             episodeToMediaItem(episode, episode.imageUrl ?: defaultArtworkUrl)
         }
-        val controller = controllerFuture.await()
+        val controller = awaitController()
         if (requestId != latestPlaybackRequest) return null
         controller.setMediaItems(items, 0, startMs)
         controller.prepare()
@@ -110,31 +152,96 @@ class PlayerController private constructor(private val context: Context) : Playb
 
     override suspend fun play(requestId: Long?) {
         if (requestId != null && requestId != latestPlaybackRequest) return
-        controllerFuture.await().play()
+        val controller = awaitController()
+        if (requestId != null && requestId != latestPlaybackRequest) return
+        restoreRecoveryPlaylist(controller)
+        if (controller.mediaItemCount == 0) error("Choose an episode to play")
+        if (controller.playbackState == Player.STATE_IDLE || controller.playerError != null) controller.prepare()
+        controller.play()
     }
 
-    override suspend fun pause() = controllerFuture.await().pause()
-    override suspend fun seekTo(position: Long) = controllerFuture.await().seekTo(position)
-    override suspend fun skipToPrevious() = controllerFuture.await().seekToPreviousMediaItem()
-    override suspend fun skipToNext() = controllerFuture.await().seekToNextMediaItem()
+    override suspend fun pause() {
+        val request = latestPlaybackRequest
+        val controller = awaitController()
+        if (request == latestPlaybackRequest) controller.pause()
+    }
+    override suspend fun seekTo(position: Long) = awaitController().seekTo(position)
+    override suspend fun skipToPrevious() = navigate(next = false)
+    override suspend fun skipToNext() = navigate(next = true)
+
+    private suspend fun navigate(next: Boolean) {
+        val request = latestPlaybackRequest
+        val controller = awaitController()
+        if (request != latestPlaybackRequest) return
+        restoreRecoveryPlaylist(controller)
+        if (next) controller.seekToNextMediaItem() else controller.seekToPreviousMediaItem()
+    }
+
+    override suspend fun recover(requestId: Long) {
+        val controller = awaitController()
+        if (requestId != latestPlaybackRequest) return
+        restoreRecoveryPlaylist(controller)
+        val items = (0 until controller.mediaItemCount).map { controller.getMediaItemAt(it) }
+        val index = controller.currentMediaItemIndex.coerceAtLeast(0)
+        val position = controller.currentPosition.coerceAtLeast(0)
+        val speed = controller.playbackParameters.speed
+        val playable = withContext(Dispatchers.IO) { items.map { withStreamingFallback(it) } }
+        if (requestId != latestPlaybackRequest) return
+        if (playable.isEmpty()) {
+            restoreLastSessionIfNeeded()
+            if (requestId != latestPlaybackRequest) return
+            if (controller.mediaItemCount == 0) error("Choose an episode to play")
+        } else {
+            controller.setMediaItems(playable, index, position)
+            controller.playbackParameters = controller.playbackParameters.withSpeed(speed)
+        }
+        controller.prepare()
+        controller.play()
+    }
+
+    private fun restoreRecoveryPlaylist(controller: MediaController) {
+        if (controller.mediaItemCount != 0 || recoveryItems.isEmpty()) return
+        controller.setMediaItems(recoveryItems, recoveryIndex, recoveryPosition)
+        controller.playbackParameters = controller.playbackParameters.withSpeed(recoverySpeed)
+    }
+
+    private fun withStreamingFallback(item: MediaItem): MediaItem {
+        val uri = item.localConfiguration?.uri?.toString().orEmpty()
+        if (!isLocalReference(uri) || payloadProbe.probe(uri) is MediaPayloadAvailability.Available) return item
+        val original = item.mediaMetadata.extras?.getString(EXTRA_ORIGINAL_URL)
+        return if (original?.startsWith("http") == true) item.buildUpon().setUri(original).build() else item
+    }
 
     override suspend fun setPlaybackSpeed(speed: Float) {
-        val controller = controllerFuture.await()
+        val request = latestPlaybackRequest
+        val controller = awaitController()
+        if (request != latestPlaybackRequest) return
         controller.playbackParameters = controller.playbackParameters.withSpeed(speed)
     }
 
     override suspend fun stop() {
-        controllerFuture.await().run {
+        val request = latestPlaybackRequest
+        awaitController().run {
+            if (request != latestPlaybackRequest) return
             stop()
             clearMediaItems()
+            recoveryItems = emptyList()
+            PlaybackDownloadProtection.episodeIds = emptySet()
         }
     }
 
-    override suspend fun snapshot(): ControllerSnapshot = snapshotOf(controllerFuture.await())
+    override suspend fun snapshot(): ControllerSnapshot = snapshotOf(awaitController())
 
     private fun snapshotOf(controller: MediaController): ControllerSnapshot {
         val item = controller.currentMediaItem
         val episode = item?.let(::mediaItemToEpisode)
+        if (controller.mediaItemCount > 0) {
+            recoveryItems = (0 until controller.mediaItemCount).map { controller.getMediaItemAt(it) }
+            recoveryIndex = controller.currentMediaItemIndex.coerceAtLeast(0)
+            recoveryPosition = controller.currentPosition.coerceAtLeast(0)
+            recoverySpeed = controller.playbackParameters.speed
+            PlaybackDownloadProtection.episodeIds = recoveryItems.drop(recoveryIndex).mapTo(hashSetOf()) { it.mediaId }
+        }
         return ControllerSnapshot(
             currentEpisode = episode,
             artworkUrl = item?.mediaMetadata?.artworkUri?.toString(),
@@ -147,41 +254,45 @@ class PlayerController private constructor(private val context: Context) : Playb
             hasPrevious = controller.hasPreviousMediaItem(),
             hasNext = controller.hasNextMediaItem(),
             playbackSpeed = controller.playbackParameters.speed,
-        )
+        ).also { lastSnapshot = it }
     }
 
     override suspend fun addListener(listener: PlaybackControllerListener) {
-        val controller = controllerFuture.await()
-        withContext(Dispatchers.Main.immediate) {
-            val media3Listener = object : Player.Listener {
-                override fun onEvents(player: Player, events: Player.Events) {
-                    listener.onSnapshotChanged(snapshotOf(controller))
-                }
+        // Register before connecting so recovery after an initial connection failure reattaches it too.
+        listeners[listener] = object : Player.Listener {}
+        val controller = awaitController()
+        attachListener(controller, listener)
+        listener.onSnapshotChanged(snapshotOf(controller))
+    }
+
+    private fun attachListener(controller: MediaController, listener: PlaybackControllerListener) {
+        val adapter = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (controller.isConnected) listener.onSnapshotChanged(snapshotOf(controller))
             }
-            listeners.put(listener, media3Listener)?.let(controller::removeListener)
-            controller.addListener(media3Listener)
-            listener.onSnapshotChanged(snapshotOf(controller))
         }
+        listeners.put(listener, adapter)?.let(controller::removeListener)
+        controller.addListener(adapter)
     }
 
     override fun removeListener(listener: PlaybackControllerListener) {
-        val media3Listener = listeners.remove(listener) ?: return
-        controllerFuture.addListener(
-            { controllerFuture.get().removeListener(media3Listener) },
-            ContextCompat.getMainExecutor(context),
-        )
+        val adapter = listeners.remove(listener) ?: return
+        connection.state.value?.removeListener(adapter)
     }
 
     override suspend fun restoreLastSessionIfNeeded(): Episode? {
-        val controller = controllerFuture.await()
+        val request = latestPlaybackRequest
+        val controller = awaitController()
+        if (request != latestPlaybackRequest) return null
         if (controller.mediaItemCount == 0) {
             val session = playbackSessionStorage.load() ?: return null
             val playable = withContext(Dispatchers.IO) {
-                session.items.withIndex().filter { (_, item) ->
+                session.items.map(::withStreamingFallback).withIndex().filter { (_, item) ->
                     val uri = item.localConfiguration?.uri?.toString().orEmpty()
                     !isLocalReference(uri) || payloadProbe.probe(uri) is MediaPayloadAvailability.Available
                 }
             }
+            if (request != latestPlaybackRequest) return null
             if (playable.isEmpty()) {
                 playbackSessionStorage.clear()
                 return null
@@ -210,7 +321,7 @@ class PlayerController private constructor(private val context: Context) : Playb
             title = item.mediaMetadata.title?.toString().orEmpty(),
             description = item.mediaMetadata.description?.toString(),
             pubDate = null,
-            audioUrl = uri,
+            audioUrl = item.mediaMetadata.extras?.getString(EXTRA_ORIGINAL_URL) ?: uri,
             duration = null,
             imageUrl = item.mediaMetadata.artworkUri?.toString(),
             isDownloaded = isLocal,
@@ -259,11 +370,12 @@ class PlayerController private constructor(private val context: Context) : Playb
         }
     }
 
-    fun release() = MediaController.releaseFuture(controllerFuture)
-    suspend fun awaitController(): MediaController = controllerFuture.await()
+    fun release() = connection.invalidate()
+    suspend fun awaitController(): MediaController = withContext(Dispatchers.Main.immediate) { connection.await() }
 
     companion object {
         @Volatile private var instance: PlayerController? = null
+        const val EXTRA_ORIGINAL_URL = "com.podcastplayer.app.originalUrl"
         private const val EXTRA_MEDIA_TYPE = "com.podcastplayer.app.mediaType"
 
         fun getInstance(context: Context): PlayerController = instance ?: synchronized(this) {

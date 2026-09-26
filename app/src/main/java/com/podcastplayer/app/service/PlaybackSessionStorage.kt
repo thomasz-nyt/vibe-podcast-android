@@ -27,6 +27,7 @@ data class PlaybackSessionItemSnapshot(
     val artist: String?,
     val description: String?,
     val artworkUri: String?,
+    val originalUrl: String? = null,
 )
 
 /** Plain-data snapshot of the whole playback session, ready to be JSON-serialized and
@@ -65,6 +66,7 @@ class PlaybackSessionStorage(context: Context) {
                     put(JSONObject().apply {
                         put("mediaId", item.mediaId)
                         put("uri", item.uri)
+                        put("originalUrl", item.originalUrl)
                         put("title", item.title)
                         put("artist", item.artist)
                         put("description", item.description)
@@ -90,6 +92,10 @@ class PlaybackSessionStorage(context: Context) {
                 if (uri.isBlank() || mediaId.isBlank()) continue
 
                 val metadata = MediaMetadata.Builder()
+                    .setExtras(android.os.Bundle().apply {
+                        putString(PlayerController.EXTRA_ORIGINAL_URL,
+                            itemJson.optString("originalUrl").takeIf { it.startsWith("http") })
+                    })
                     .setTitle(itemJson.optString("title").ifBlank { null })
                     .setArtist(itemJson.optString("artist").ifBlank { null })
                     .setDescription(itemJson.optString("description").ifBlank { null })

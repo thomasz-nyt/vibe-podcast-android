@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -21,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -30,28 +33,29 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.podcastplayer.app.BuildConfig
 import com.podcastplayer.app.data.local.AppSettings
-import com.podcastplayer.app.data.local.DatabaseProvider
-import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.CanonicalMediaReference
+import com.podcastplayer.app.data.local.DatabaseProvider
+import com.podcastplayer.app.data.local.FeedSnapshotStorage
 import com.podcastplayer.app.data.local.MediaPayloadAvailability
 import com.podcastplayer.app.data.local.MediaStoreScanner
+import com.podcastplayer.app.data.local.QueueStorage
 import com.podcastplayer.app.data.local.SavedPodcastsStorage
 import com.podcastplayer.app.data.remote.RssParser
 import com.podcastplayer.app.data.remote.iTunesApi
 import com.podcastplayer.app.data.repository.DownloadManager
 import com.podcastplayer.app.data.repository.ManualDownloadRepository
 import com.podcastplayer.app.data.repository.PodcastRepository
+import com.podcastplayer.app.data.repository.QueuePlaybackResult
 import com.podcastplayer.app.domain.model.Episode
+import com.podcastplayer.app.domain.model.PlaybackState
 import com.podcastplayer.app.domain.model.Podcast
 import com.podcastplayer.app.presentation.viewmodel.PlayerViewModel
 import com.podcastplayer.app.presentation.viewmodel.PodcastViewModel
 import com.podcastplayer.app.presentation.viewmodel.UrlDownloadViewModel
-import com.podcastplayer.app.domain.model.PlaybackState
+import com.podcastplayer.app.service.AutoDownloadCheckStatus
+import com.podcastplayer.app.service.AutoDownloadMonitor
 import com.podcastplayer.app.service.PlaybackSessionStorage
 import com.podcastplayer.app.service.PlayerController
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.produceState
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private object Routes {
@@ -105,7 +109,11 @@ fun PodcastNavHost(
     val mediaScanner = remember { com.podcastplayer.app.data.local.MediaStoreScanner(context) }
     val podcastViewModel: PodcastViewModel = viewModel(
         factory = PodcastViewModelFactory(
-            PodcastRepository(iTunesApi.create(), RssParser()),
+            PodcastRepository(iTunesApi.create(), RssParser(),
+                FeedSnapshotStorage(
+                    DatabaseProvider.getDatabase(context).feedSnapshotDao(),
+                ),
+            ),
             DownloadManager(context),
             ManualDownloadRepository(context),
             SavedPodcastsStorage(context),
@@ -129,6 +137,61 @@ fun PodcastNavHost(
     val navController = rememberNavController()
     val contentResolver = context.contentResolver
     val opmlScope = rememberCoroutineScope()
+    var queueResult by remember { mutableStateOf<QueuePlaybackResult?>(null) }
+    var queueError by remember { mutableStateOf<String?>(null) }
+
+    fun playQueue(podcasts: List<Podcast>) {
+        queueResult = null
+        queueError = null
+        playerViewModel.startQueuePlayback(
+            defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl,
+            resolve = { podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts) },
+            onResult = { result ->
+                queueResult = result.takeIf { it.episodes.isEmpty() || it.shows.any { show -> show.message != null } }
+                if (result.episodes.isNotEmpty()) navController.navigate(Routes.Player)
+            },
+            onFailure = { queueError = it },
+        )
+    }
+
+    queueError?.let { message ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { queueError = null },
+            title = { androidx.compose.material3.Text("Queue unavailable") },
+            text = { androidx.compose.material3.Text(message) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { queueError = null }) {
+                    androidx.compose.material3.Text("OK")
+                }
+            },
+        )
+    }
+
+    queueResult?.let { result ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { queueResult = null },
+            title = { androidx.compose.material3.Text(if (result.episodes.isEmpty()) "Queue unavailable" else "Queue details") },
+            text = {
+                androidx.compose.foundation.lazy.LazyColumn {
+                    items(result.shows.size) { index ->
+                        val show = result.shows[index]
+                        val cached = show.cachedAtMs?.let {
+                            " • Saved ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it))}"
+                        }.orEmpty()
+                        androidx.compose.material3.Text(
+                            "${show.title}: ${show.message ?: "Ready"}$cached",
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { queueResult = null }) {
+                    androidx.compose.material3.Text("OK")
+                }
+            },
+        )
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/x-opml")
@@ -159,30 +222,24 @@ fun PodcastNavHost(
         val now = java.time.LocalTime.now()
         if (now >= java.time.LocalTime.of(8, 30)) return@LaunchedEffect
 
-        // Wait for session restore in PlayerViewModel.init to complete.
-        delay(2000)
+        val generation = playerViewModel.playbackGeneration
+        playerViewModel.awaitInitialization()
+        if (generation != playerViewModel.playbackGeneration || generation != 0L) return@LaunchedEffect
 
-        // Only skip auto-play if something is actively playing/loading (not paused/restored).
+        // A restored loading session may be stalled; Morning owns startup unless playback is active.
         val playbackState = playerViewModel.playerState.value.state
-        if (playbackState == PlaybackState.PLAYING || playbackState == PlaybackState.LOADING) return@LaunchedEffect
+        if (playbackState == PlaybackState.PLAYING) return@LaunchedEffect
 
         // Find "Morning" queue and resolve its podcasts.
         val morningPayload = queueStorage.queues.value
             .firstOrNull { it.name.equals("Morning", ignoreCase = true) }
             ?: return@LaunchedEffect
 
-        val savedMap = podcastViewModel.savedPodcasts.value.associateBy { it.id }
+        val savedMap = SavedPodcastsStorage(context).savedPodcasts.value.associateBy { it.id }
         val podcasts = morningPayload.podcastIds.mapNotNull { savedMap[it] }
         if (podcasts.isEmpty()) return@LaunchedEffect
 
-        val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
-        if (episodes.isNotEmpty()) {
-            playerViewModel.playEpisodesQueue(
-                episodes = episodes,
-                defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
-            )
-            navController.navigate(Routes.Player)
-        }
+        playQueue(podcasts)
     }
 
     // React to a Share intent (issue #33). MainActivity hands us the URL via [sharedUrl];
@@ -353,7 +410,6 @@ fun PodcastNavHost(
                 }
 
                 composable(Routes.Search) {
-                    val scope = rememberCoroutineScope()
                     val selectedQueuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
 
                     PodcastListScreen(
@@ -369,16 +425,7 @@ fun PodcastNavHost(
                         onPlayQueue = {
                             val podcasts = selectedQueuePodcasts
                             if (podcasts.isNotEmpty()) {
-                                scope.launch {
-                                    val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(podcasts)
-                                    if (episodes.isNotEmpty()) {
-                                        playerViewModel.playEpisodesQueue(
-                                            episodes = episodes,
-                                            defaultArtworkUrl = podcasts.firstOrNull()?.artworkUrl
-                                        )
-                                        navController.navigate(Routes.Player)
-                                    }
-                                }
+                                playQueue(podcasts)
                             }
                         },
                         onAddFromUrl = { rawUrl ->
@@ -427,7 +474,12 @@ fun PodcastNavHost(
                 }
 
                 composable(Routes.Queue) {
-                    val scope = rememberCoroutineScope()
+                    val checkMonitor = remember { AutoDownloadMonitor(context) }
+                    val check by checkMonitor.status.collectAsState(
+                        AutoDownloadCheckStatus("Not checked yet", 0L),
+                    )
+                    val requests by podcastViewModel.downloadRequests.collectAsState()
+
                     val queues by podcastViewModel.queues.collectAsState()
                     val selectedQueueId by podcastViewModel.selectedQueueId.collectAsState()
                     val queuePodcasts by podcastViewModel.selectedQueuePodcasts.collectAsState()
@@ -457,19 +509,28 @@ fun PodcastNavHost(
                         },
                         onPlayQueue = {
                             if (queuePodcasts.isNotEmpty()) {
-                                scope.launch {
-                                    val episodes = podcastViewModel.buildUnplayedEpisodesForPodcastQueue(queuePodcasts)
-                                    if (episodes.isNotEmpty()) {
-                                        playerViewModel.playEpisodesQueue(
-                                            episodes = episodes,
-                                            defaultArtworkUrl = queuePodcasts.firstOrNull()?.artworkUrl
-                                        )
-                                        navController.navigate(Routes.Player)
-                                    }
-                                }
+                                playQueue(queuePodcasts)
                             }
                         },
                         onDismissPlayer = { playerViewModel.clearPlayer() },
+                        downloadStatus = run {
+                            val active = requests.filter { request -> queuePodcasts.any { it.id == request.podcastId } }
+                            val transfers = when {
+                                active.any { it.status == "FAILED" } -> "Downloads failed"
+                                active.any { it.status == "RUNNING" } -> "Downloading episodes"
+                                active.any { it.status == "QUEUED" } -> "Waiting for allowed network or download slot"
+                                else -> "Downloads completed"
+                            }
+                            val last = if (check.lastSuccessMs > 0) java.text.DateFormat.getDateTimeInstance()
+                                .format(java.util.Date(check.lastSuccessMs)) else "Never"
+                            "${check.message} • $transfers\nLast successful check: $last"
+                        },
+                        downloadFailures = requests.filter { request ->
+                            request.status == "FAILED" && queuePodcasts.any { it.id == request.podcastId }
+                        },
+                        onCheckDownloads = { podcastViewModel.checkDownloadsNow() },
+                        onRetryDownload = { podcastViewModel.retryDownload(it) },
+                        onDismissDownload = { podcastViewModel.dismissDownload(it) },
                         onToggleAutoDownload = { id, enabled ->
                             podcastViewModel.setQueueAutoDownload(id, enabled)
                         },
@@ -910,6 +971,7 @@ fun PodcastNavHost(
                         onAutoDownloadCellularChange = { enabled ->
                             appSettings.setAutoDownloadOnCellular(enabled)
                             // Re-schedule the worker so the new network constraint takes effect.
+                            opmlScope.launch { ManualDownloadRepository(context).updateAutomaticConstraints() }
                             com.podcastplayer.app.service.AutoDownloadWorker.reschedule(
                                 context, allowCellular = enabled,
                             )

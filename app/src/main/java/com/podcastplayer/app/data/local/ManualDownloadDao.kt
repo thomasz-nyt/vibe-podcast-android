@@ -12,6 +12,12 @@ interface ManualDownloadDao {
     @Query("SELECT * FROM manual_downloads ORDER BY createdAtMs ASC")
     fun observeAll(): Flow<List<ManualDownloadEntity>>
 
+    @Query("SELECT * FROM manual_downloads WHERE episodeId = :episodeId")
+    suspend fun getByEpisodeId(episodeId: String): ManualDownloadEntity?
+
+    @Query("UPDATE manual_downloads SET origin = 'MANUAL' WHERE episodeId = :episodeId")
+    suspend fun pin(episodeId: String)
+
     @Query("SELECT * FROM manual_downloads WHERE requestId = :requestId")
     suspend fun getByRequestId(requestId: String): ManualDownloadEntity?
 

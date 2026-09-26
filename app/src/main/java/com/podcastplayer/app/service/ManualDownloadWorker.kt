@@ -19,13 +19,16 @@ import com.podcastplayer.app.data.local.ManualDownloadEntity
 import com.podcastplayer.app.data.local.ManualDownloadStatus
 import com.podcastplayer.app.data.local.toEpisode
 import com.podcastplayer.app.data.repository.DownloadManager
+import com.podcastplayer.app.data.repository.DownloadRetryPolicy
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 /** Runs user-requested RSS downloads outside the UI process lifecycle. */
 class ManualDownloadWorker(
@@ -42,7 +45,13 @@ class ManualDownloadWorker(
 
         // Promote before waiting for a concurrency slot so WorkManager may keep a large queued
         // download alive beyond the normal execution window.
-        setForeground(createForegroundInfo(request, 0))
+        try {
+            setForeground(createForegroundInfo(request, 0))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            return handleFailure(requestId, error)
+        }
         return downloadSlots.withPermit {
             runDownload(requestId, request)
         }
@@ -73,7 +82,7 @@ class ManualDownloadWorker(
                 val result = DownloadManager(applicationContext).downloadEpisode(
                     episode = request.toEpisode(),
                     podcastTitle = request.podcastTitle,
-                    origin = DownloadOrigin.MANUAL,
+                    origin = DownloadOrigin.valueOf(dao.getByRequestId(requestId)?.origin ?: request.origin),
                 ) { progress ->
                     progressUpdates.trySend((progress * 100f).toInt().coerceIn(0, 100))
                 }
@@ -84,12 +93,22 @@ class ManualDownloadWorker(
 
             downloadResult.fold(
                 onSuccess = {
+                    val current = dao.getByRequestId(requestId)
+                    if (current?.origin == DownloadOrigin.MANUAL.name) {
+                        DatabaseProvider.getDatabase(applicationContext).downloadedEpisodeDao().pin(request.episodeId)
+                    }
                     dao.deleteByRequestId(requestId)
+                    if (current?.origin == DownloadOrigin.AUTO.name) {
+                        AutoDownloadRetentionManager(applicationContext).trimPodcast(request.podcastId)
+                    }
                     Result.success()
                 },
                 onFailure = { error -> handleFailure(requestId, error) },
             )
         } catch (e: CancellationException) {
+            withContext(NonCancellable + Dispatchers.IO) {
+                dao.updateState(requestId, ManualDownloadStatus.QUEUED.name, 0f, null)
+            }
             throw e
         } catch (t: Throwable) {
             handleFailure(requestId, t)
@@ -97,7 +116,8 @@ class ManualDownloadWorker(
     }
 
     private suspend fun handleFailure(requestId: String, error: Throwable): Result {
-        if (runAttemptCount < MAX_RETRY_ATTEMPTS) {
+        if (error is CancellationException) throw error
+        if (DownloadRetryPolicy.shouldRetry(error, runAttemptCount)) {
             dao.updateState(
                 requestId = requestId,
                 status = ManualDownloadStatus.QUEUED.name,
@@ -174,7 +194,6 @@ class ManualDownloadWorker(
         const val KEY_REQUEST_ID = "request_id"
         const val WORK_TAG = "vibe.manual-download"
 
-        private const val MAX_RETRY_ATTEMPTS = 2
         private const val MAX_CONCURRENT_DOWNLOADS = 2
         private const val CHANNEL_ID = "episode_downloads_channel"
         private const val NOTIFICATION_ID_BASE = 5_000
