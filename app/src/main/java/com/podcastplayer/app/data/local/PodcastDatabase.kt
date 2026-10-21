@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ManualDownloadEntity::class,
         FeedSnapshotEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class PodcastDatabase : RoomDatabase() {
@@ -25,6 +25,21 @@ abstract class PodcastDatabase : RoomDatabase() {
     abstract fun feedSnapshotDao(): FeedSnapshotDao
 
     companion object {
+        /** One-time recovery of failures saved before foreground-denial fallback was available. */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    UPDATE manual_downloads
+                    SET status = 'QUEUED', progressPercent = 0, errorMessage = NULL
+                    WHERE status = 'FAILED'
+                        AND instr(errorMessage, 'startForegroundService() not allowed') > 0
+                        AND instr(errorMessage, 'androidx.work.impl.foreground.SystemForegroundService') > 0
+                    """.trimIndent(),
+                )
+            }
+        }
+
         val MIGRATION_5_6: Migration = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE manual_downloads ADD COLUMN origin TEXT NOT NULL DEFAULT 'MANUAL'")

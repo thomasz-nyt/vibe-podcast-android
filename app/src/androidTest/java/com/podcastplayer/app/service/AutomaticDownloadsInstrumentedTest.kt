@@ -6,9 +6,15 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.work.BackoffPolicy
 import androidx.work.Configuration
+import androidx.work.ExistingWorkPolicy
 import androidx.work.ListenableWorker
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.Worker
+import androidx.work.WorkerParameters
+import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
 import androidx.work.workDataOf
@@ -17,12 +23,15 @@ import com.podcastplayer.app.data.local.DatabaseProvider
 import com.podcastplayer.app.data.local.DownloadOrigin
 import com.podcastplayer.app.data.local.ManualDownloadEntity
 import com.podcastplayer.app.data.local.MediaIdentity
+import com.podcastplayer.app.data.local.PodcastDatabase
 import com.podcastplayer.app.data.local.toEpisode
 import com.podcastplayer.app.data.repository.ManualDownloadRepository
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -136,6 +145,62 @@ class AutomaticDownloadsInstrumentedTest {
         } finally { dao.deleteByRequestId(request.requestId) }
     }
 
+    @Test fun recoveredQueuedRequestsReplaceFailedWorkWithoutDuplicates() = runBlocking {
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder().setExecutor(SynchronousExecutor()).build(),
+        )
+        val repository = ManualDownloadRepository(context)
+        val workManager = WorkManager.getInstance(context)
+        val settings = AppSettings.getInstance(context)
+        val originalCellular = settings.autoDownloadOnCellular.value
+        // One row has no old work; two have terminal WorkManager jobs from the failed attempts.
+        val recovered = listOf(request("AUTO"), request("MANUAL"), request("AUTO"))
+        fun workName(row: ManualDownloadEntity) = "vibe.manual-download.${MediaIdentity.rss(row.episodeId).sha256}"
+        try {
+            settings.setAutoDownloadOnCellular(false)
+            recovered.take(2).forEach { row ->
+                val old = OneTimeWorkRequestBuilder<PreviouslyFailedDownloadWorker>().build()
+                workManager.enqueueUniqueWork(workName(row), ExistingWorkPolicy.KEEP, old).result.await()
+                withTimeout(5_000) {
+                    while (workManager.getWorkInfoById(old.id).await()?.state != WorkInfo.State.FAILED) delay(10)
+                }
+            }
+            recovered.forEach {
+                dao.insert(it.copy(
+                    status = "FAILED", progressPercent = 42f,
+                    errorMessage = "startForegroundService() not allowed: " +
+                        "androidx.work.impl.foreground.SystemForegroundService",
+                ))
+            }
+            val database = DatabaseProvider.getDatabase(context)
+            database.runInTransaction {
+                PodcastDatabase.MIGRATION_6_7.migrate(database.openHelper.writableDatabase)
+            }
+            repository.resumePending()
+            val scheduledIds = recovered.map { row ->
+                val active = workManager.getWorkInfosForUniqueWork(workName(row)).await().filterNot { it.state.isFinished }
+                assertEquals(1, active.size)
+                val work = active.single()
+                assertEquals(WorkInfo.State.ENQUEUED, work.state)
+                assertEquals(
+                    if (row.origin == "AUTO") NetworkType.UNMETERED else NetworkType.CONNECTED,
+                    work.constraints.requiredNetworkType,
+                )
+                assertEquals(row, dao.getByRequestId(row.requestId))
+                work.id
+            }
+            repository.resumePending()
+            recovered.forEachIndexed { index, row ->
+                val active = workManager.getWorkInfosForUniqueWork(workName(row)).await().filterNot { it.state.isFinished }
+                assertEquals(listOf(scheduledIds[index]), active.map { it.id })
+            }
+        } finally {
+            recovered.forEach { repository.remove(it.requestId) }
+            settings.setAutoDownloadOnCellular(originalCellular)
+        }
+    }
+
     @Test fun retentionProtectsManualAndUpcomingDownloads() = runBlocking {
         val database = DatabaseProvider.getDatabase(context)
         val dao = database.downloadedEpisodeDao()
@@ -169,4 +234,9 @@ class AutomaticDownloadsInstrumentedTest {
             duration = null, createdAtMs = 1, origin = origin,
         )
     }
+}
+
+/** Models an earlier terminal WorkManager job independently of the current download worker. */
+class PreviouslyFailedDownloadWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+    override fun doWork(): Result = Result.failure()
 }
