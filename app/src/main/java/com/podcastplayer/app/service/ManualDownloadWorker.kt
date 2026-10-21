@@ -1,5 +1,6 @@
 package com.podcastplayer.app.service
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -43,21 +45,39 @@ class ManualDownloadWorker(
         val requestId = inputData.getString(KEY_REQUEST_ID) ?: return Result.failure()
         val request = dao.getByRequestId(requestId) ?: return Result.success()
 
-        // Promote before waiting for a concurrency slot so WorkManager may keep a large queued
-        // download alive beyond the normal execution window.
-        try {
-            setForeground(createForegroundInfo(request, 0))
+        val foreground = DownloadForegroundSession(
+            promote = { percent -> setForeground(createForegroundInfo(request, percent)) },
+            isStartDenied = { error ->
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    error is ForegroundServiceStartNotAllowedException
+            },
+            onStartDenied = {
+                Log.w("ManualDownloadWorker", "Foreground start denied; using bounded background download")
+            },
+        )
+        return try {
+            foreground.run(
+                onBackgroundTimeout = {
+                    dao.updateState(requestId, ManualDownloadStatus.QUEUED.name, 0f, null)
+                    Result.retry()
+                },
+            ) {
+                downloadSlots.withPermit {
+                    runDownload(requestId, request, foreground)
+                }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            return handleFailure(requestId, error)
-        }
-        return downloadSlots.withPermit {
-            runDownload(requestId, request)
+            handleFailure(requestId, error)
         }
     }
 
-    private suspend fun runDownload(requestId: String, request: ManualDownloadEntity): Result {
+    private suspend fun runDownload(
+        requestId: String,
+        request: ManualDownloadEntity,
+        foreground: DownloadForegroundSession,
+    ): Result {
         dao.updateState(
             requestId = requestId,
             status = ManualDownloadStatus.RUNNING.name,
@@ -76,7 +96,7 @@ class ManualDownloadWorker(
                             progressPercent = percent.toFloat(),
                             errorMessage = null,
                         )
-                        setForeground(createForegroundInfo(request, percent))
+                        foreground.update(percent)
                     }
                 }
                 val result = DownloadManager(applicationContext).downloadEpisode(
