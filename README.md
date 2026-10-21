@@ -8,7 +8,8 @@ A simple podcast player app built with Kotlin and Jetpack Compose.
 - **RSS Feed Parsing**: Parse podcast RSS feeds to get episode listings
 - **Media Playback**: Full-featured audio player using ExoPlayer (Media3)
 - **Offline Playback**: Download episodes for offline listening; explicit RSS
-  downloads persist in Room and continue through foreground WorkManager jobs
+  downloads persist in Room and continue through WorkManager, with bounded background execution when Android denies a
+  foreground service start
 - **Honest Availability**: Missing or unreadable local files stay as repairable metadata instead of
   being counted or played as valid offline media
 - **Background Play**: Foreground service with media session for background playback
@@ -116,7 +117,7 @@ This project expects **JDK 17**. If your system `java` is newer and Gradle fails
 - `PlayerController.kt`: Interface to control the player service
 - `UrlDownloadService.kt`: Foreground service that drives yt-dlp downloads for
   the "Add from URL" feature, surfacing progress in the notification shade
-- `ManualDownloadWorker.kt`: Durable foreground WorkManager job for RSS episode downloads
+- `ManualDownloadWorker.kt`: Durable WorkManager job for RSS episode downloads, with foreground progress when allowed
 
 ### Add-from-URL feature (issue #33)
 
