@@ -22,6 +22,12 @@ The YouTube download path keeps its existing transfer implementation.
 - RSS automatic downloads use the existing Room request table and WorkManager worker, with bounded concurrency,
   exponential backoff for transient failures, and retained terminal failures. Manual ownership takes priority.
   Queue UI reports checking, waiting, downloading, completed, failed, and the last successful check, with Retry/Dismiss.
+- If Android rejects an RSS worker's foreground service start, the transfer continues as bounded background work.
+  Progress stays in Room, and that run stops requesting foreground promotion. A nine-minute limit measured from worker
+  startup (including concurrency waits) cancels unfinished background work, keeps the request queued, and returns
+  WorkManager retry without recording a terminal failure. Permission errors still fail explicitly. Transfers with
+  allowed foreground promotion can exceed that background limit. Downloads restart rather than resume partial bytes,
+  so exceptionally slow transfers may need a foreground run to finish. Existing failed requests require Retry.
 - Migration 5 → 6 adds feed snapshots and an origin column defaulting to MANUAL. Existing request IDs, unique worker
   names, download metadata, and progress are preserved. Retention protects manual and current/upcoming playback items.
 
@@ -37,6 +43,11 @@ Connected tests cover schema 5 → 6 data preservation, snapshot persistence aft
 retention, WorkManager constraints and cadence, ownership/deduplication, interrupted enqueue reconciliation, retained
 failures, retention protection, real Media3 service recreation with a generated local WAV, and natural versus manual
 queue transitions.
+
+Foreground download regressions cover denied startup and progress promotion, suppression of repeated promotion,
+background deadlines and cancellation, unrestricted foreground duration, and permission failures. Android tests inject
+`ForegroundServiceStartNotAllowedException` into the real worker and verify the saved bytes and request cleanup after a
+local HTTP transfer; these run in GitHub Actions. Physical-device confirmation of the reported error remains pending.
 
 The original morning spinner has not been reproduced on the user's device. CI lifecycle coverage and its actual
 outcome must be reported separately from that original symptom. No local APK build is required for this handoff.
