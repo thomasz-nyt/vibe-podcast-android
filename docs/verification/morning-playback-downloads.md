@@ -27,9 +27,14 @@ The YouTube download path keeps its existing transfer implementation.
   startup (including concurrency waits) cancels unfinished background work, keeps the request queued, and returns
   WorkManager retry without recording a terminal failure. Permission errors still fail explicitly. Transfers with
   allowed foreground promotion can exceed that background limit. Downloads restart rather than resume partial bytes,
-  so exceptionally slow transfers may need a foreground run to finish. Existing failed requests require Retry.
+  so exceptionally slow transfers may need a foreground run to finish.
 - Migration 5 → 6 adds feed snapshots and an origin column defaulting to MANUAL. Existing request IDs, unique worker
   names, download metadata, and progress are preserved. Retention protects manual and current/upcoming playback items.
+- Migration 6 → 7 automatically queues saved FAILED requests once when their error contains both
+  `startForegroundService() not allowed` and `androidx.work.impl.foreground.SystemForegroundService`. It clears the old
+  error and resets progress while preserving request IDs, episode metadata, and AUTO/MANUAL ownership. Startup
+  reconciliation schedules them under the existing network rules, including when earlier WorkManager jobs failed.
+  The queued rows survive interrupted startup. Unrelated failures and subsequent terminal failures still require Retry.
 
 ## Verification
 
@@ -39,7 +44,8 @@ execution run in the existing GitHub Actions workflow, per the user's instructio
 Regression coverage includes delayed initialization and queue construction, superseded/null preparation, buffering
 exhaustion and Retry, navigation errors, pause cancellation, disconnected connections, connection timeouts, exact
 local queue selection, cold offline snapshots, missing files, mixed queues, retry policy, and unchanged ordering.
-Connected tests cover schema 5 → 6 data preservation, snapshot persistence after reopening the database, failed-refresh
+Connected tests cover schema 5 → 7 data preservation, the targeted one-time 6 → 7 recovery (including three saved
+failures, unrelated errors, and reopening), snapshot persistence after reopening the database, failed-refresh
 retention, WorkManager constraints and cadence, ownership/deduplication, interrupted enqueue reconciliation, retained
 failures, retention protection, real Media3 service recreation with a generated local WAV, and natural versus manual
 queue transitions.
