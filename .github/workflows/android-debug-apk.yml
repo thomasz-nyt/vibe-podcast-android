@@ -41,7 +41,7 @@ jobs:
         run: ./gradlew --no-daemon testDebugUnitTest
       - name: Upload unit-test reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unit-test-reports-${{ github.sha }}
           path: |
@@ -73,7 +73,7 @@ jobs:
         run: ./gradlew --no-daemon lintDebug
       - name: Upload lint reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lint-reports-${{ github.sha }}
           path: app/build/reports/lint-results-debug.*
@@ -102,7 +102,7 @@ jobs:
       - name: Build debug and release APKs
         run: ./gradlew --no-daemon assembleDebug assembleRelease
       - name: Upload debug APK artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-debug-apk-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
@@ -198,7 +198,7 @@ jobs:
           PY
       - name: Upload connected-test reports
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: connected-test-reports-${{ github.sha }}
           path: |
